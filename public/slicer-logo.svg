@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="SLICER logo">
+  <rect width="64" height="64" rx="16" fill="#20343b"/>
+  <rect x="10" y="10" width="44" height="44" rx="12" fill="url(#mark)"/>
+  <path d="M32 18a14 14 0 1 0 11.4 22.1" fill="none" stroke="#15343b" stroke-width="7" stroke-linecap="round"/>
+  <path d="M39.5 36.5 51 31l-5.5 11.5c-1.7.5-3.6.1-4.9-1.2s-1.7-3.1-1.1-4.8Z" fill="#ffd166"/>
+  <defs>
+    <linearGradient id="mark" x1="14" x2="52" y1="12" y2="54" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#9adcca"/>
+      <stop offset="1" stop-color="#4da0bb"/>
+    </linearGradient>
+  </defs>
+</svg>

@@ -1,0 +1,91 @@
+# generated: 2026-05-18T13:43:32.8181438+08:00
+# last_updated: 2026-05-18T17:25:00+08:00
+# project: slicer
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: D:/AIProject/slicer/_bmad-output/implementation-artifacts
+
+# STATUS DEFINITIONS:
+# ==================
+# Epic Status:
+#   - backlog: Epic not yet started
+#   - in-progress: Epic actively being worked on
+#   - done: All stories in epic completed
+#
+# Epic Status Transitions:
+#   - backlog -> in-progress: Automatically when first story is created (via create-story)
+#   - in-progress -> done: Manually when all stories reach 'done' status
+#
+# Story Status:
+#   - backlog: Story only exists in epic file
+#   - ready-for-dev: Story file created in stories folder
+#   - in-progress: Developer actively working on implementation
+#   - review: Ready for code review (via Dev's code-review workflow)
+#   - done: Story completed
+#
+# Retrospective Status:
+#   - optional: Can be completed but not required
+#   - done: Retrospective has been completed
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic transitions to 'in-progress' automatically when first story is created
+# - Stories can be worked in parallel if team capacity allows
+# - Developer typically creates next story after previous one is 'done' to incorporate learnings
+# - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
+
+generated: 2026-05-18T13:43:32.8181438+08:00
+last_updated: 2026-05-18T17:25:00+08:00
+project: slicer
+project_key: NOKEY
+tracking_system: file-system
+story_location: D:/AIProject/slicer/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: in-progress
+  1-1-初始化-tauri-react-typescript-starter-与主导航: done
+  1-2-选择并初始化本地工作目录: review
+  1-3-建立-sqlite-权威账本与核心状态枚举: review
+  1-4-建立持久化-job-orchestrator-基础能力: in-progress
+  1-5-建立统一错误模型-诊断日志与敏感信息保护: backlog
+  1-6-完成设置页基础体验与工作台空状态: backlog
+  epic-1-retrospective: optional
+
+  epic-2: backlog
+  2-1-pdf-导入到页面-png-的端到端纵切片: backlog
+  2-2-多文件导入-文件类型校验与重复识别: backlog
+  2-3-office-文档转换为中间-pdf-并接入页面渲染: backlog
+  2-4-页面图片资产写入-内容哈希命名与冲突保护: backlog
+  2-5-导入任务进度-失败恢复与重试能力: backlog
+  2-6-页面-文档与任务-jsonl-artifact-导出和一致性校验: backlog
+  2-7-工作台导入体验完善-任务列表-失败原因和处理入口: backlog
+  epic-2-retrospective: optional
+
+  epic-3: backlog
+  3-1-配置模型-provider-endpoint-与密钥安全状态: backlog
+  3-2-建立-page_analysis_v1-schema-prompt-契约与校验器: backlog
+  3-3-单页图片分析端到端纵切片: backlog
+  3-4-新页面批量分析与单文档重新分析: backlog
+  3-5-分析失败处理-单页重试与安全诊断: backlog
+  3-6-分析结果持久化-页面-json-生成与-jsonl-一致性: backlog
+  3-7-工作台分析体验完善-分析入口-进度-结果摘要与重试: backlog
+  epic-3-retrospective: optional
+
+  epic-4: backlog
+  4-1-建立-searchprovider-抽象与索引状态基础: backlog
+  4-2-实现-tantivy-bm25-provider-与中文-analyzer-策略: backlog
+  4-3-从可信页面分析结果构建首个-bm25-索引: backlog
+  4-4-全量索引重建-active-index-原子切换与失败保护: backlog
+  4-5-searchservice-查询结果-dto-与页面可追溯返回: backlog
+  4-6-搜索页基础体验-输入-结果列表-图片预览与-json-查看: backlog
+  4-7-索引重建入口-状态展示与搜索体验收口: backlog
+  epic-4-retrospective: optional
+
+  epic-5: backlog
+  5-1-嵌入式-axum-localhost-api-服务基础与设置控制: backlog
+  5-2-统一-http-dto-成功响应与-apperror-错误映射: backlog
+  5-3-get-health-返回应用-工作区与索引状态: backlog
+  5-4-get-search-get-pages-page_id-与-get-documents-document_id-读取接口: backlog
+  5-5-post-indexes-rebuild-token-保护与后台重建任务: backlog
+  5-6-api-合同测试-settings-可见性与外部访问收口: backlog
+  epic-5-retrospective: optional
