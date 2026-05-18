@@ -413,6 +413,13 @@ h3 {
   background: #fff8e9;
 }
 
+.error-correlation {
+  margin-top: 6px;
+  color: #8a9aa1;
+  font-size: 12px;
+  font-family: monospace;
+}
+
 .json-placeholder {
   overflow: auto;
   margin: 0;

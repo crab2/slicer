@@ -1,9 +1,11 @@
 mod artifacts;
 mod commands;
+mod diagnostics;
 mod domain;
 mod errors;
 mod jobs;
 mod repositories;
+mod security;
 mod services;
 
 use commands::diagnostics_commands::record_diagnostic_error;
@@ -11,20 +13,26 @@ use commands::job_commands::{
     create_job, create_placeholder_job, fail_job, get_core_status_catalog, list_jobs,
     recover_interrupted_jobs, update_job_progress,
 };
-use commands::settings_commands::get_app_settings;
+use commands::settings_commands::{delete_api_key, get_app_settings, save_api_key};
 use commands::workspace_commands::{get_workspace_status, select_workspace};
 use services::workspace_service::WorkspaceService;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let config_dir = resolve_config_dir();
+    let log_dir = config_dir.join("logs");
+    let _guard = diagnostics::init_tracing(&log_dir);
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
-        .manage(WorkspaceService::new(resolve_config_dir()))
+        .manage(WorkspaceService::new(config_dir))
         .invoke_handler(tauri::generate_handler![
             get_workspace_status,
             select_workspace,
             get_app_settings,
+            save_api_key,
+            delete_api_key,
             get_core_status_catalog,
             list_jobs,
             create_placeholder_job,

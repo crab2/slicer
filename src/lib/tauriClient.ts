@@ -46,6 +46,8 @@ export const tauriClient = {
     return callTauriCommand<WorkspaceStatusDto>("select_workspace", { path: selected });
   },
   getAppSettings: () => callTauriCommand<AppSettingsDto>("get_app_settings"),
+  saveApiKey: (key: string) => callTauriCommand<void>("save_api_key", { key }),
+  deleteApiKey: () => callTauriCommand<void>("delete_api_key"),
   getCoreStatusCatalog: () =>
     callTauriCommand<CoreStatusCatalogDto>("get_core_status_catalog"),
   listJobs: () => callTauriCommand<JobDto[]>("list_jobs"),
