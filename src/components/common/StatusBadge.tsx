@@ -1,6 +1,6 @@
 import type { PropsWithChildren } from "react";
 
-type StatusTone = "neutral" | "warning" | "success";
+type StatusTone = "neutral" | "warning" | "success" | "danger";
 
 interface StatusBadgeProps {
   tone?: StatusTone;

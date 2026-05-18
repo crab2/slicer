@@ -4,7 +4,9 @@ import type {
   AppErrorDto,
   AppSettingsDto,
   CoreStatusCatalogDto,
+  CreateJobRequestDto,
   JobDto,
+  UpdateJobProgressRequestDto,
   WorkspaceStatusDto,
 } from "../types/app";
 
@@ -15,6 +17,20 @@ export async function callTauriCommand<TResult>(
   args?: TauriCommandArgs,
 ): Promise<TResult> {
   return invoke<TResult>(command, args);
+}
+
+function createJob(jobType: string) {
+  const request: CreateJobRequestDto = { job_type: jobType };
+  return callTauriCommand<JobDto>("create_job", { request });
+}
+
+function updateJobProgress(jobId: string, progress: number, message?: string | null) {
+  const request: UpdateJobProgressRequestDto = {
+    job_id: jobId,
+    progress,
+    message: message ?? null,
+  };
+  return callTauriCommand<JobDto>("update_job_progress", { request });
 }
 
 export const tauriClient = {
@@ -33,8 +49,12 @@ export const tauriClient = {
   getCoreStatusCatalog: () =>
     callTauriCommand<CoreStatusCatalogDto>("get_core_status_catalog"),
   listJobs: () => callTauriCommand<JobDto[]>("list_jobs"),
-  createPlaceholderJob: (jobType: string) =>
-    callTauriCommand<JobDto>("create_placeholder_job", { job_type: jobType }),
+  createJob,
+  createPlaceholderJob: createJob,
+  updateJobProgress,
+  failJob: (jobId: string, code: string, message: string) =>
+    callTauriCommand<JobDto>("fail_job", { job_id: jobId, code, message }),
+  recoverInterruptedJobs: () => callTauriCommand<JobDto[]>("recover_interrupted_jobs"),
   recordDiagnosticError: (code: string, message: string, stage: string) =>
     callTauriCommand<AppErrorDto>("record_diagnostic_error", { code, message, stage }),
 };

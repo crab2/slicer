@@ -249,6 +249,11 @@ h3 {
   background: #c9eadc;
 }
 
+.status-badge[data-tone="danger"] {
+  color: #8f2d2f;
+  background: #f4c9ca;
+}
+
 .button {
   min-height: 38px;
   padding: 0 14px;
@@ -284,6 +289,66 @@ h3 {
 
 .workbench-actions {
   margin-top: 12px;
+}
+
+.job-list-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.job-list {
+  display: grid;
+  gap: 12px;
+}
+
+.job-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #d8e0e4;
+  border-radius: 8px;
+  background: #f8fafb;
+}
+
+.job-card-header,
+.job-meta {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.job-meta {
+  color: #52636a;
+  font-size: 13px;
+}
+
+.progress-track {
+  position: relative;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e3eaed;
+}
+
+.progress-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #245b64, #6bb7a8);
+}
+
+.job-error,
+.job-event {
+  margin: 0;
+  color: #52636a;
+  font-size: 14px;
+}
+
+.job-error {
+  color: #8f2d2f;
 }
 
 .workspace-picker {
@@ -414,6 +479,8 @@ h3 {
 @media (max-width: 520px) {
   .topbar,
   .panel-header,
+  .job-card-header,
+  .job-meta,
   .setting-row,
   .workspace-summary {
     align-items: stretch;

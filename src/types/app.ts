@@ -53,13 +53,31 @@ export interface CoreStatusCatalogDto {
   job_statuses: string[];
 }
 
+export type JobStatusValue =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled";
+
 export interface JobDto {
   job_id: string;
   job_type: string;
-  status: string;
+  status: JobStatusValue | string;
   progress: number;
   created_at: string;
   updated_at: string;
   error_id?: string | null;
   error_summary?: string | null;
+  last_event_message?: string | null;
+}
+
+export interface CreateJobRequestDto {
+  job_type: string;
+}
+
+export interface UpdateJobProgressRequestDto {
+  job_id: string;
+  progress: number;
+  message?: string | null;
 }
