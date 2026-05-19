@@ -65,7 +65,7 @@ development_status:
   3-1-配置模型-provider-endpoint-与密钥安全状态: backlog
   3-2-建立-page_analysis_v1-schema-prompt-契约与校验器: backlog
   3-3-单页图片分析端到端纵切片: backlog
-  3-4-新页面批量分析与单文档重新分析: backlog
+  3-4-新页面批量分析与单文档重新分析: ready-for-dev
   3-5-分析失败处理-单页重试与安全诊断: backlog
   3-6-分析结果持久化-页面-json-生成与-jsonl-一致性: backlog
   3-7-工作台分析体验完善-分析入口-进度-结果摘要与重试: backlog
