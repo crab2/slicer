@@ -11,6 +11,8 @@ pub fn record_diagnostic_error(
     workspace: State<'_, WorkspaceService>,
 ) -> Result<AppError, AppError> {
     let error = AppError::new(code, message, stage, true);
+    let span = crate::diagnostics::correlation_span(&error.correlation_id);
+    let _guard = span.enter();
     let layout = workspace.current_layout()?;
     LedgerRepository::new(layout).record_error(&error)?;
     Ok(error)

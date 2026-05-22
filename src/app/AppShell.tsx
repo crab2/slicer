@@ -57,7 +57,12 @@ export function AppShell() {
   const currentView = useMemo(() => {
     switch (activeView) {
       case "search":
-        return <SearchPage />;
+        return (
+          <SearchPage
+            workspaceReady={workspaceStatus.status === "ready"}
+            isActive={activeView === "search"}
+          />
+        );
       case "settings":
         return (
           <SettingsPage
@@ -72,11 +77,13 @@ export function AppShell() {
           <WorkbenchPage
             workspaceStatus={workspaceStatus}
             isWorkspaceLoading={isWorkspaceLoading}
+            isActive={activeView === "workbench"}
             onChooseWorkspace={handleChooseWorkspace}
+            onOpenSettings={() => setActiveView("settings")}
           />
         );
     }
-  }, [activeView, isWorkspaceLoading, workspaceStatus]);
+  }, [activeView, isWorkspaceLoading, workspaceStatus, activeView]);
 
   const workspaceReady = workspaceStatus.status === "ready";
   const workspaceIssue = workspaceStatus.error?.message;

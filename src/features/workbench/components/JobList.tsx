@@ -1,14 +1,24 @@
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../../../components/common/Button";
 import { EmptyState } from "../../../components/common/EmptyState";
 import { ErrorMessage } from "../../../components/common/ErrorMessage";
 import { StatusBadge } from "../../../components/common/StatusBadge";
 import type { JobDto } from "../../../types/app";
+import {
+  filterJobsByStatus,
+  JobPagination,
+  JobStatusTabs,
+  paginateJobs,
+  type JobStatusFilter,
+} from "./JobListControls";
+
+const PAGE_SIZE = 4;
 
 interface JobListProps {
   jobs: JobDto[];
   isLoading: boolean;
   isCreatingDemo: boolean;
-  errorMessage: string | null;
+  errorMessage: { message: string; correlationId?: string | null } | null;
   onCreateDemoJob: () => void;
   onRefresh: () => void;
 }
@@ -21,6 +31,27 @@ export function JobList({
   onCreateDemoJob,
   onRefresh,
 }: JobListProps) {
+  const [activeStatus, setActiveStatus] = useState<JobStatusFilter>("all");
+  const [page, setPage] = useState(1);
+  const filteredJobs = useMemo(
+    () => filterJobsByStatus(jobs, activeStatus),
+    [jobs, activeStatus],
+  );
+  const pageCount = Math.max(1, Math.ceil(filteredJobs.length / PAGE_SIZE));
+  const currentPage = Math.min(page, pageCount);
+  const visibleJobs = useMemo(
+    () => paginateJobs(filteredJobs, currentPage, PAGE_SIZE),
+    [filteredJobs, currentPage],
+  );
+
+  useEffect(() => {
+    setPage(1);
+  }, [activeStatus]);
+
+  useEffect(() => {
+    setPage((current) => Math.min(current, pageCount));
+  }, [pageCount]);
+
   return (
     <section className="panel panel-wide job-list-panel">
       <div className="panel-header">
@@ -28,7 +59,7 @@ export function JobList({
           <p className="eyebrow">任务编排</p>
           <h2>任务列表</h2>
           <p className="muted-copy">
-            这里仅渲染统一 Job DTO，不启动真实导入、分析或索引流程。
+            导入、分析和索引任务的执行记录与进度。
           </p>
         </div>
         <div className="action-row">
@@ -45,7 +76,7 @@ export function JobList({
         </div>
       </div>
 
-      {errorMessage ? <ErrorMessage title="任务列表暂不可用" message={errorMessage} /> : null}
+      {errorMessage ? <ErrorMessage title="任务列表暂不可用" message={errorMessage.message} correlationId={errorMessage.correlationId} /> : null}
 
       {jobs.length === 0 ? (
         <EmptyState
@@ -53,42 +84,63 @@ export function JobList({
           description="创建一个示例任务即可验证持久化任务结构与前端展示，不会触发真实业务处理。"
         />
       ) : (
-        <div className="job-list" aria-label="任务列表">
-          {jobs.map((job) => (
-            <article className="job-card" key={job.job_id}>
-              <div className="job-card-header">
-                <div>
-                  <p className="eyebrow">任务类型</p>
-                  <h3>{job.job_type}</h3>
-                </div>
-                <StatusBadge tone={statusTone(job.status)}>{statusLabel(job.status)}</StatusBadge>
-              </div>
+        <>
+          <JobStatusTabs
+            jobs={jobs}
+            activeStatus={activeStatus}
+            onStatusChange={setActiveStatus}
+            ariaLabel="筛选任务状态"
+          />
+          {visibleJobs.length === 0 ? (
+            <p className="job-filter-empty">当前状态下暂无任务。</p>
+          ) : (
+            <div className="job-list" aria-label="任务列表">
+              {visibleJobs.map((job) => (
+                <article className="job-card" key={job.job_id}>
+                  <div className="job-card-header">
+                    <div>
+                      <p className="eyebrow">任务类型</p>
+                      <h3>{job.job_type}</h3>
+                    </div>
+                    <StatusBadge tone={statusTone(job.status)}>
+                      {statusLabel(job.status)}
+                    </StatusBadge>
+                  </div>
 
-              <div className="job-meta">
-                <span>进度 {boundedProgress(job.progress)}%</span>
-                <span>更新于 {formatDateTime(job.updated_at)}</span>
-              </div>
+                  <div className="job-meta">
+                    <span>进度 {boundedProgress(job.progress)}%</span>
+                    <span>更新于 {formatDateTime(job.updated_at)}</span>
+                  </div>
 
-              <div
-                className="progress-track"
-                aria-label={`${job.job_type} 进度 ${boundedProgress(job.progress)}%`}
-              >
-                <span
-                  className="progress-fill"
-                  style={{ width: `${boundedProgress(job.progress)}%` }}
-                />
-              </div>
+                  <div
+                    className="progress-track"
+                    aria-label={`${job.job_type} 进度 ${boundedProgress(job.progress)}%`}
+                  >
+                    <span
+                      className="progress-fill"
+                      style={{ width: `${boundedProgress(job.progress)}%` }}
+                    />
+                  </div>
 
-              {job.error_summary ? (
-                <p className="job-error">失败摘要：{job.error_summary}</p>
-              ) : (
-                <p className="job-event">
-                  {job.last_event_message ?? "任务已写入账本，等待后续服务更新。"}
-                </p>
-              )}
-            </article>
-          ))}
-        </div>
+                  {job.error_summary ? (
+                    <p className="job-error">失败摘要：{job.error_summary}</p>
+                  ) : (
+                    <p className="job-event">
+                      {job.last_event_message ?? "任务已写入账本，等待后续服务更新。"}
+                    </p>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+          <JobPagination
+            page={currentPage}
+            pageCount={pageCount}
+            pageSize={PAGE_SIZE}
+            totalItems={filteredJobs.length}
+            onPageChange={setPage}
+          />
+        </>
       )}
     </section>
   );

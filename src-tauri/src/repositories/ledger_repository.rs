@@ -233,11 +233,14 @@ impl LedgerRepository {
     }
 
     pub fn record_error(&self, error: &AppError) -> AppResult<()> {
+        self.record_error_with_id(error).map(|_| ())
+    }
+
+    pub fn record_error_with_id(&self, error: &AppError) -> AppResult<String> {
         block_on_db(async {
             run_migrations(self.layout.app_db_path()).await?;
             let mut connection = connect_workspace_db(self.layout.app_db_path()).await?;
-            insert_error(&mut connection, error).await?;
-            Ok(())
+            insert_error(&mut connection, error).await
         })
     }
 }
@@ -316,7 +319,8 @@ async fn fetch_job(connection: &mut sqlx::SqliteConnection, job_id: &str) -> App
     .await
     .map_err(|err| database_error("ledger", "job_read_failed", err))?;
 
-    row.map(job_from_row).unwrap_or_else(|| Err(job_not_found(job_id)))
+    row.map(job_from_row)
+        .unwrap_or_else(|| Err(job_not_found(job_id)))
 }
 
 fn job_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<JobDto> {
@@ -354,12 +358,22 @@ fn job_from_row(row: sqlx::sqlite::SqliteRow) -> AppResult<JobDto> {
             .try_get("error_id")
             .map_err(|err| database_error("ledger", "job_error_id_read_failed", err))?,
         error_summary: row
-            .try_get("error_summary")
-            .map_err(|err| database_error("ledger", "job_error_summary_read_failed", err))?,
+            .try_get::<Option<String>, _>("error_summary")
+            .map_err(|err| database_error("ledger", "job_error_summary_read_failed", err))?
+            .map(normalize_legacy_job_text),
         last_event_message: row
-            .try_get("last_event_message")
-            .map_err(|err| database_error("ledger", "job_last_event_read_failed", err))?,
+            .try_get::<Option<String>, _>("last_event_message")
+            .map_err(|err| database_error("ledger", "job_last_event_read_failed", err))?
+            .map(normalize_legacy_job_text),
     })
+}
+
+fn normalize_legacy_job_text(value: String) -> String {
+    value
+        .replace("椤甸潰鍒嗘瀽瀹屾垚", "页面分析完成")
+        .replace("鎵归噺鍒嗘瀽瀹屾垚", "批量分析完成")
+        .replace("璇婃柇缂栧彿锛歿}", "诊断编号: ")
+        .replace("鐠囧﹥鏌囩紓鏍у娇閿涙}", "诊断编号: ")
 }
 
 fn job_not_found(job_id: &str) -> AppError {
@@ -429,17 +443,30 @@ mod tests {
 
         block_on_db(async {
             let mut connection = connect_workspace_db(layout.app_db_path()).await?;
-            let event_count = sqlx::query_scalar::<_, i64>(
-                "SELECT COUNT(*) FROM job_events WHERE job_id = ?1",
-            )
-            .bind(job.job_id)
-            .fetch_one(&mut connection)
-            .await
-            .map_err(|err| database_error("test", "event_count_failed", err))?;
+            let event_count =
+                sqlx::query_scalar::<_, i64>("SELECT COUNT(*) FROM job_events WHERE job_id = ?1")
+                    .bind(job.job_id)
+                    .fetch_one(&mut connection)
+                    .await
+                    .map_err(|err| database_error("test", "event_count_failed", err))?;
             assert_eq!(event_count, 3);
             Ok(())
         })
         .expect("event check");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn list_jobs_normalizes_legacy_mojibake_messages() {
+        let (root, _layout, repository) = test_repository("slicer-job-mojibake");
+        let job = repository.append_job("page_analysis").expect("job");
+        repository
+            .update_job_progress(&job.job_id, 100, Some("椤甸潰鍒嗘瀽瀹屾垚"))
+            .expect("completed");
+
+        let jobs = repository.list_jobs().expect("jobs");
+        assert_eq!(jobs[0].last_event_message.as_deref(), Some("页面分析完成"));
 
         let _ = fs::remove_dir_all(root);
     }

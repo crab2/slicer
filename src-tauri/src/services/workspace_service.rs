@@ -1,8 +1,13 @@
 use crate::artifacts::workspace_layout::WorkspaceLayout;
+use crate::domain::settings::AppSettingsDto;
 use crate::domain::workspace::{CurrentWorkspace, WorkspaceStatus, WorkspaceStatusDto};
 use crate::errors::{AppError, AppResult};
+use crate::repositories::db::{block_on_db, connect_workspace_db, run_migrations};
 use crate::repositories::ledger_repository::LedgerRepository;
 use crate::repositories::settings_repository::SettingsRepository;
+use crate::repositories::workspace_settings_repository::WorkspaceSettingsRepository;
+use crate::services::api_server_service::ApiServerService;
+use sqlx::SqliteConnection;
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
 use std::sync::Mutex;
@@ -10,6 +15,16 @@ use std::sync::Mutex;
 pub struct WorkspaceService {
     settings: SettingsRepository,
     current: Mutex<Option<CurrentWorkspace>>,
+}
+
+impl Clone for WorkspaceService {
+    fn clone(&self) -> Self {
+        let current = self.current.lock().ok().and_then(|guard| guard.clone());
+        Self {
+            settings: self.settings.clone(),
+            current: Mutex::new(current),
+        }
+    }
 }
 
 impl WorkspaceService {
@@ -53,7 +68,11 @@ impl WorkspaceService {
         }
     }
 
-    pub fn select_workspace(&self, path: String) -> WorkspaceStatusDto {
+    pub fn select_workspace(
+        &self,
+        path: String,
+        api_server: &ApiServerService,
+    ) -> WorkspaceStatusDto {
         let requested_root = PathBuf::from(&path);
         match self.initialize_workspace(requested_root.clone()) {
             Ok(layout) => {
@@ -61,6 +80,15 @@ impl WorkspaceService {
                 if let Ok(mut guard) = self.current.lock() {
                     *guard = Some(CurrentWorkspace { root: root.clone() });
                 }
+
+                if let Err(err) = Self::reconcile_api_for_new_workspace(&layout, api_server) {
+                    tracing::warn!(
+                        target: "api",
+                        code = %err.code,
+                        "切换工作区后协调 localhost API 失败"
+                    );
+                }
+
                 WorkspaceStatusDto {
                     status: WorkspaceStatus::Ready.as_str().to_string(),
                     workspace_path: Some(path_to_string(&root)),
@@ -69,6 +97,33 @@ impl WorkspaceService {
             }
             Err(error) => selection_status_with_error(requested_root, error),
         }
+    }
+
+    fn reconcile_api_for_new_workspace(
+        layout: &WorkspaceLayout,
+        api_server: &ApiServerService,
+    ) -> AppResult<()> {
+        let record = WorkspaceSettingsRepository::new(layout.clone()).load_workspace_settings()?;
+        let mut settings = AppSettingsDto::default();
+        settings.apply_workspace_record(record);
+        api_server.reconcile_for_new_workspace(&settings)
+    }
+
+    pub fn settings_repository(&self) -> &SettingsRepository {
+        &self.settings
+    }
+
+    pub fn workspace_layout(&self) -> AppResult<WorkspaceLayout> {
+        self.current_layout()
+    }
+
+    pub fn get_db_connection(&self) -> AppResult<SqliteConnection> {
+        let layout = self.current_layout()?;
+        let db_path = layout.app_db_path();
+        block_on_db(async {
+            run_migrations(db_path.clone()).await?;
+            connect_workspace_db(db_path).await
+        })
     }
 
     pub fn current_layout(&self) -> AppResult<WorkspaceLayout> {
@@ -192,7 +247,17 @@ fn status_with_error(error: AppError) -> WorkspaceStatusDto {
 }
 
 fn path_to_string(path: impl AsRef<std::path::Path>) -> String {
-    path.as_ref().to_string_lossy().into_owned()
+    normalize_display_path(&path.as_ref().to_string_lossy())
+}
+
+fn normalize_display_path(path: &str) -> String {
+    if let Some(stripped) = path.strip_prefix(r"\\?\UNC\") {
+        return format!(r"\\{stripped}");
+    }
+    if let Some(stripped) = path.strip_prefix(r"\\?\") {
+        return stripped.to_string();
+    }
+    path.to_string()
 }
 
 fn selection_status_with_error(path: PathBuf, error: AppError) -> WorkspaceStatusDto {
@@ -210,8 +275,15 @@ fn selection_status_with_error(path: PathBuf, error: AppError) -> WorkspaceStatu
 
 #[cfg(test)]
 mod tests {
-    use super::WorkspaceService;
+    use super::{normalize_display_path, WorkspaceService};
+    use crate::api::state::ApiAppState;
+    use crate::services::api_server_service::ApiServerService;
     use std::fs;
+    use std::sync::Arc;
+
+    fn test_state(config_dir: &std::path::Path) -> ApiAppState {
+        ApiAppState::new(Arc::new(WorkspaceService::new(config_dir.to_path_buf())))
+    }
 
     #[test]
     fn select_workspace_creates_layout_and_restores() {
@@ -222,8 +294,14 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
 
         let service = WorkspaceService::new(config.clone());
-        let selected = service.select_workspace(workspace.to_string_lossy().into_owned());
+        let api = ApiServerService::new(test_state(&config));
+        let selected = service.select_workspace(workspace.to_string_lossy().into_owned(), &api);
         assert_eq!(selected.status, "ready");
+        assert!(!selected
+            .workspace_path
+            .as_deref()
+            .unwrap_or_default()
+            .starts_with(r"\\?\"));
         assert!(workspace.join("originals").is_dir());
         assert!(workspace.join("indexes").join("bm25").is_dir());
         assert!(workspace.join("app.db").is_file());
@@ -232,7 +310,7 @@ mod tests {
         assert!(!workspace.join("errors.json").exists());
 
         fs::write(workspace.join("originals").join("keep.txt"), "keep").expect("sentinel");
-        let again = service.select_workspace(workspace.to_string_lossy().into_owned());
+        let again = service.select_workspace(workspace.to_string_lossy().into_owned(), &api);
         assert_eq!(again.status, "ready");
         assert_eq!(
             fs::read_to_string(workspace.join("originals").join("keep.txt")).expect("sentinel"),
@@ -254,7 +332,8 @@ mod tests {
         fs::write(&file, "file").expect("file");
 
         let service = WorkspaceService::new(base.join("config"));
-        let result = service.select_workspace(file.to_string_lossy().into_owned());
+        let api = ApiServerService::new(test_state(&base.join("config")));
+        let result = service.select_workspace(file.to_string_lossy().into_owned(), &api);
         assert_eq!(result.status, "invalid");
         assert_eq!(result.error.expect("error").code, "workspace_not_directory");
 
@@ -270,7 +349,8 @@ mod tests {
         let _ = fs::remove_dir_all(&base);
 
         let service = WorkspaceService::new(config.clone());
-        let selected = service.select_workspace(workspace.to_string_lossy().into_owned());
+        let api = ApiServerService::new(test_state(&config));
+        let selected = service.select_workspace(workspace.to_string_lossy().into_owned(), &api);
         let expected_path = selected
             .workspace_path
             .clone()
@@ -281,7 +361,10 @@ mod tests {
 
         let restored = WorkspaceService::new(config).get_workspace_status();
         assert_eq!(restored.status, "missing");
-        assert_eq!(restored.workspace_path.as_deref(), Some(expected_path.as_str()));
+        assert_eq!(
+            restored.workspace_path.as_deref(),
+            Some(expected_path.as_str())
+        );
         assert_eq!(restored.error.expect("error").code, "workspace_missing");
 
         let _ = fs::remove_dir_all(base);
@@ -303,7 +386,8 @@ mod tests {
         fs::set_permissions(&probe, permissions).expect("readonly");
 
         let service = WorkspaceService::new(base.join("config"));
-        let result = service.select_workspace(workspace.to_string_lossy().into_owned());
+        let api = ApiServerService::new(test_state(&base.join("config")));
+        let result = service.select_workspace(workspace.to_string_lossy().into_owned(), &api);
         assert_eq!(result.status, "error");
         assert_eq!(result.error.expect("error").code, "workspace_not_writable");
 
@@ -312,5 +396,21 @@ mod tests {
         fs::set_permissions(&probe, cleanup_permissions).expect("writable");
 
         let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn display_paths_hide_windows_verbatim_prefixes() {
+        assert_eq!(
+            normalize_display_path(r"\\?\C:\Users\51314\Documents\slicer-data"),
+            r"C:\Users\51314\Documents\slicer-data"
+        );
+        assert_eq!(
+            normalize_display_path(r"\\?\UNC\server\share\slicer-data"),
+            r"\\server\share\slicer-data"
+        );
+        assert_eq!(
+            normalize_display_path(r"C:\Users\51314\Documents\slicer-data"),
+            r"C:\Users\51314\Documents\slicer-data"
+        );
     }
 }

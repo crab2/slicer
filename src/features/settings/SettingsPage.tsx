@@ -1,34 +1,15 @@
+import { useEffect, useState } from "react";
+import { Button } from "../../components/common/Button";
+import { ErrorMessage } from "../../components/common/ErrorMessage";
 import { StatusBadge } from "../../components/common/StatusBadge";
-import type { WorkspaceStatusDto } from "../../types/app";
+import { tauriClient } from "../../lib/tauriClient";
+import type {
+  ApiServerStatusDto,
+  AppSettingsDto,
+  WorkspaceStatusDto,
+} from "../../types/app";
+import { ApiServerSettings } from "./components/ApiServerSettings";
 import { WorkspaceSettings } from "./components/WorkspaceSettings";
-
-const settingsSections = [
-  {
-    title: "LibreOffice",
-    description: "用于后续 Office 文档转换。当前先保留路径与检测入口。",
-    meta: "未检测",
-  },
-  {
-    title: "模型",
-    description: "Provider、Endpoint、model name 与密钥状态会保存到安全设置层。",
-    meta: "未配置",
-  },
-  {
-    title: "并发",
-    description: "默认图片 DPI 144，转换并发 2，分析并发 2。",
-    meta: "默认",
-  },
-  {
-    title: "localhost API",
-    description: "默认关闭；后续启用时仅监听 127.0.0.1 并使用 token 保护重任务。",
-    meta: "关闭",
-  },
-  {
-    title: "隐私提示",
-    description: "所有数据默认保存在本地工作区；启用云端模型前会提示页面图片发送范围。",
-    meta: "本地优先",
-  },
-];
 
 interface SettingsPageProps {
   workspaceStatus: WorkspaceStatusDto;
@@ -41,22 +22,376 @@ export function SettingsPage({
   isWorkspaceLoading,
   onChooseWorkspace,
 }: SettingsPageProps) {
+  const [settings, setSettings] = useState<AppSettingsDto | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [error, setError] = useState<{ message: string; correlationId?: string | null } | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [apiRuntimeStatus, setApiRuntimeStatus] =
+    useState<ApiServerStatusDto | null>(null);
+
+  // API key state
+  const [apiKeyInput, setApiKeyInput] = useState("");
+  const [isSavingKey, setIsSavingKey] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setIsLoading(true);
+    tauriClient
+      .getAppSettings()
+      .then((s) => {
+        if (!cancelled) setSettings(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(extractError(e));
+      })
+      .finally(() => {
+        if (!cancelled) setIsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceStatus.workspace_path, workspaceStatus.status]);
+
+  useEffect(() => {
+    if (workspaceStatus.status !== "ready") {
+      setApiRuntimeStatus(null);
+      return;
+    }
+    let cancelled = false;
+    const fetchStatus = async () => {
+      try {
+        const s = await tauriClient.getApiServerStatus();
+        if (!cancelled) setApiRuntimeStatus(s);
+      } catch {
+        // 静默忽略：状态会在下一次轮询自然恢复
+      }
+    };
+    fetchStatus();
+    const intervalId = window.setInterval(fetchStatus, 2000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [workspaceStatus.status, workspaceStatus.workspace_path]);
+
+  function validateBeforeSave(current: AppSettingsDto): string | null {
+    if (current.default_image_dpi < 72 || current.default_image_dpi > 300) {
+      return "默认图片 DPI 须在 72 到 300 之间。";
+    }
+    if (current.conversion_concurrency < 1 || current.conversion_concurrency > 8) {
+      return "转换并发数须在 1 到 8 之间。";
+    }
+    if (current.analysis_concurrency < 1 || current.analysis_concurrency > 8) {
+      return "分析并发数须在 1 到 8 之间。";
+    }
+    return null;
+  }
+
+  async function handleSave() {
+    if (!settings) return;
+    const validationError = validateBeforeSave(settings);
+    if (validationError) {
+      setError({ message: validationError });
+      return;
+    }
+    setIsSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      await tauriClient.saveAppSettings(settings);
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (e) {
+      setError(extractError(e));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleSaveApiKey() {
+    if (!apiKeyInput.trim()) return;
+    setIsSavingKey(true);
+    setError(null);
+    try {
+      await tauriClient.saveApiKey(apiKeyInput.trim());
+      setApiKeyInput("");
+      // Refresh settings to update api_key_configured
+      const updated = await tauriClient.getAppSettings();
+      setSettings(updated);
+    } catch (e) {
+      setError(extractError(e));
+    } finally {
+      setIsSavingKey(false);
+    }
+  }
+
+  async function handleDeleteApiKey() {
+    setIsSavingKey(true);
+    setError(null);
+    try {
+      await tauriClient.deleteApiKey();
+      const updated = await tauriClient.getAppSettings();
+      setSettings(updated);
+    } catch (e) {
+      setError(extractError(e));
+    } finally {
+      setIsSavingKey(false);
+    }
+  }
+
+  function updateField<K extends keyof AppSettingsDto>(
+    key: K,
+    value: AppSettingsDto[K],
+  ) {
+    setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }
+
+  if (isLoading) {
+    return (
+      <div className="settings-list">
+        <WorkspaceSettings
+          status={workspaceStatus}
+          isLoading={isWorkspaceLoading}
+          onChooseWorkspace={onChooseWorkspace}
+        />
+        <section className="panel">
+          <p className="muted-copy">设置加载中...</p>
+        </section>
+      </div>
+    );
+  }
+
+  if (!settings) {
+    return (
+      <div className="settings-list">
+        <WorkspaceSettings
+          status={workspaceStatus}
+          isLoading={isWorkspaceLoading}
+          onChooseWorkspace={onChooseWorkspace}
+        />
+        {error ? <ErrorMessage title="设置加载失败" message={error.message} correlationId={error.correlationId} /> : null}
+      </div>
+    );
+  }
+
   return (
     <div className="settings-list">
+      {error ? (
+        <ErrorMessage title="设置操作失败" message={error.message} correlationId={error.correlationId} />
+      ) : null}
+
       <WorkspaceSettings
         status={workspaceStatus}
         isLoading={isWorkspaceLoading}
         onChooseWorkspace={onChooseWorkspace}
       />
-      {settingsSections.map(({ title, description, meta }) => (
-        <section className="panel setting-row" key={title}>
-          <div>
-            <h2>{title}</h2>
-            <p className="muted-copy">{description}</p>
+
+      {/* LibreOffice */}
+      <section className="panel setting-row">
+        <div>
+          <h2>LibreOffice</h2>
+          <p className="muted-copy">
+            用于后续 Office 文档转换。配置后会在导入 DOC/PPT 时自动调用。
+          </p>
+          <div className="setting-field">
+            <label>
+              <span>安装目录或 soffice 路径</span>
+              <input
+                type="text"
+                placeholder="C:/Program Files/LibreOffice/program 或 .../soffice.exe"
+                value={settings.libreoffice_path ?? ""}
+                onChange={(e) =>
+                  updateField("libreoffice_path", e.target.value || null)
+                }
+              />
+            </label>
           </div>
-          <StatusBadge>{meta}</StatusBadge>
-        </section>
-      ))}
+        </div>
+        <StatusBadge>
+          {settings.libreoffice_path ? "已配置" : "未配置"}
+        </StatusBadge>
+      </section>
+
+      {/* Model */}
+      <section className="panel setting-row">
+        <div>
+          <h2>模型配置</h2>
+          <p className="muted-copy">
+            Provider、Endpoint、model name 与密钥。启用云端模型前会提示页面图片发送范围。
+          </p>
+          <div className="setting-fields">
+            <label>
+              <span>Provider</span>
+              <select
+                value={settings.model_provider}
+                onChange={(e) => updateField("model_provider", e.target.value)}
+              >
+                <option value="siliconflow">硅基流动 SiliconFlow</option>
+                <option value="openai">OpenAI</option>
+                <option value="anthropic">Anthropic</option>
+                <option value="custom">custom（自定义 HTTP）</option>
+                <option value="openai_compatible">openai_compatible</option>
+                <option value="local_mock">local_mock（本地测试，无需 API key）</option>
+              </select>
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                type="text"
+                placeholder="https://api.example.com"
+                value={settings.base_url}
+                onChange={(e) => updateField("base_url", e.target.value)}
+              />
+            </label>
+            <label>
+              <span>自定义 Endpoint</span>
+              <input
+                type="text"
+                placeholder="留空使用默认"
+                value={settings.custom_endpoint}
+                onChange={(e) =>
+                  updateField("custom_endpoint", e.target.value)
+                }
+              />
+            </label>
+            <label>
+              <span>Model Name</span>
+              <input
+                type="text"
+                placeholder="gpt-4o"
+                value={settings.model_name}
+                onChange={(e) => updateField("model_name", e.target.value)}
+              />
+            </label>
+          </div>
+        </div>
+        <StatusBadge tone={settings.api_key_configured ? "success" : "warning"}>
+          {settings.api_key_configured ? "密钥已配置" : "密钥未配置"}
+        </StatusBadge>
+      </section>
+
+      {/* API Key */}
+      <section className="panel setting-row">
+        <div>
+          <h2>API Key</h2>
+          <p className="muted-copy">
+            通过系统密钥存储保存，不会出现在日志或配置文件中。
+          </p>
+          <div className="setting-field api-key-field">
+            <input
+              type="password"
+              placeholder={settings.api_key_configured ? "输入新密钥以替换" : "输入 API 密钥"}
+              value={apiKeyInput}
+              onChange={(e) => setApiKeyInput(e.target.value)}
+            />
+            <Button
+              onClick={handleSaveApiKey}
+              disabled={isSavingKey || !apiKeyInput.trim()}
+            >
+              {isSavingKey ? "保存中" : "保存密钥"}
+            </Button>
+            {settings.api_key_configured ? (
+              <Button onClick={handleDeleteApiKey} disabled={isSavingKey}>
+                删除密钥
+              </Button>
+            ) : null}
+          </div>
+        </div>
+        <StatusBadge tone={settings.api_key_configured ? "success" : "neutral"}>
+          {settings.api_key_configured ? "已配置" : "未配置"}
+        </StatusBadge>
+      </section>
+
+      {/* Concurrency */}
+      <section className="panel setting-row">
+        <div>
+          <h2>并发与图片</h2>
+          <p className="muted-copy">
+            默认图片 DPI 144，转换并发 2，分析并发 2。
+          </p>
+          <div className="setting-fields">
+            <label>
+              <span>默认图片 DPI</span>
+              <input
+                type="number"
+                min={72}
+                max={300}
+                value={settings.default_image_dpi}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (!isNaN(v)) updateField("default_image_dpi", v);
+                }}
+              />
+            </label>
+            <label>
+              <span>转换并发数</span>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={settings.conversion_concurrency}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (!isNaN(v)) updateField("conversion_concurrency", v);
+                }}
+              />
+            </label>
+            <label>
+              <span>分析并发数</span>
+              <input
+                type="number"
+                min={1}
+                max={8}
+                value={settings.analysis_concurrency}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (!isNaN(v)) updateField("analysis_concurrency", v);
+                }}
+              />
+            </label>
+          </div>
+        </div>
+        <StatusBadge>默认</StatusBadge>
+      </section>
+
+      {/* Localhost API */}
+      <ApiServerSettings
+        settings={settings}
+        onUpdateField={updateField}
+        runtimeStatus={apiRuntimeStatus}
+        isLoading={isSaving}
+      />
+
+      {/* Privacy */}
+      <section className="panel setting-row">
+        <div>
+          <h2>隐私提示</h2>
+          <p className="muted-copy">
+            所有数据默认保存在本地工作区。启用云端模型前会提示页面图片会发送到用户配置的模型服务。
+          </p>
+        </div>
+        <StatusBadge>本地优先</StatusBadge>
+      </section>
+
+      {/* Save button */}
+      <div className="settings-actions">
+        <Button variant="primary" onClick={handleSave} disabled={isSaving}>
+          {isSaving ? "保存中" : saved ? "已保存" : "保存设置"}
+        </Button>
+      </div>
     </div>
   );
+}
+
+function extractError(error: unknown): { message: string; correlationId?: string | null } {
+  if (typeof error === "object" && error !== null) {
+    const e = error as Record<string, unknown>;
+    const msg = typeof e.message === "string" ? e.message : null;
+    const cid = typeof e.correlation_id === "string" ? e.correlation_id : null;
+    if (msg) return { message: msg, correlationId: cid };
+  }
+  if (error instanceof Error) return { message: error.message };
+  if (typeof error === "string") return { message: error };
+  return { message: "设置操作失败，请稍后重试。" };
 }

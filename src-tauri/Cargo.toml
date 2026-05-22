@@ -29,4 +29,22 @@ sqlx = { version = "0.8.6", features = ["runtime-tokio-rustls", "sqlite", "chron
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 tracing-appender = "0.2"
-keyring = { version = "3", features = ["sync-secret-service"] }
+sha2 = "0.10"
+image = { version = "0.25", default-features = false, features = ["png"] }
+pdfium-render = "0.8"
+pdfium-auto = "0.3.0"
+serde_path_to_error = "0.1.20"
+base64 = "0.22.1"
+reqwest = { version = "0.13.3", features = ["blocking", "json", "rustls"] }
+tantivy = "0.22"
+axum = "0.8"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "sync", "signal"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["windows-native"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["apple-native"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+keyring = { version = "3", default-features = false, features = ["sync-secret-service"] }

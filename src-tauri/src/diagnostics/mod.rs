@@ -16,9 +16,7 @@ pub fn init_tracing(log_dir: &PathBuf) -> WorkerGuard {
         .with_target(true)
         .with_thread_ids(true);
 
-    let stderr_layer = fmt::layer()
-        .with_writer(std::io::stderr)
-        .with_target(false);
+    let stderr_layer = fmt::layer().with_writer(std::io::stderr).with_target(false);
 
     let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
 

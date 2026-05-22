@@ -35,16 +35,15 @@ impl JobOrchestrator {
         self.ledger.update_job_progress(job_id, progress, message)
     }
 
-    pub fn mark_failed(
-        &self,
-        job_id: &str,
-        error: &AppError,
-        summary: &str,
-    ) -> AppResult<JobDto> {
+    pub fn mark_failed(&self, job_id: &str, error: &AppError, summary: &str) -> AppResult<JobDto> {
         self.ledger.mark_job_failed(job_id, error, summary)
     }
 
     pub fn recover_interrupted_jobs(&self) -> AppResult<Vec<JobDto>> {
         self.ledger.recover_interrupted_jobs()
+    }
+
+    pub fn record_error(&self, error: &AppError) -> AppResult<String> {
+        self.ledger.record_error_with_id(error)
     }
 }

@@ -1,6 +1,6 @@
 # Story 1.3: 建立 SQLite 权威账本与核心状态枚举
 
-Status: review
+Status: done
 
 ## Story
 

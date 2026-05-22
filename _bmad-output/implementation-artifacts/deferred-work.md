@@ -1,5 +1,10 @@
 # Deferred Work
 
+## Deferred from: code review of 3-5-分析失败处理-单页重试与安全诊断.md (2026-05-19)
+
+- 工作台 `globals.css` 将 `body`/`.app-shell` 设为 `overflow: hidden`，可能影响小屏或长内容滚动；属布局侧效应，非 3.5 诊断核心。
+- Story 核心实现文件 `analysis_service.rs`、`DocumentList.tsx` 仍为未跟踪状态，合并前应纳入 git。
+
 Collected during story 1.4 review (2026-05-18).
 
 ## Frontend Async Safety

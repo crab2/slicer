@@ -82,11 +82,29 @@ mod tests {
     }
 
     #[test]
+    fn redact_secrets_removes_model_payload_diagnostics() {
+        assert_eq!(redact_secrets("image_base64=iVBORw0KGgoAAA"), "[redacted]");
+        assert_eq!(
+            redact_secrets("request_body={\"model\":\"x\"}"),
+            "[redacted]"
+        );
+        assert_eq!(
+            redact_secrets("raw_response={\"content\":\"...\"}"),
+            "[redacted]"
+        );
+        assert_eq!(redact_secrets("x-api-key: sk-secret"), "[redacted]");
+    }
+
+    #[test]
     fn redact_secrets_preserves_safe_content() {
         assert_eq!(redact_secrets("normal log message"), "normal log message");
         assert_eq!(
             redact_secrets("workspace initialized at /path"),
             "workspace initialized at /path"
+        );
+        assert_eq!(
+            redact_secrets("unexpected token at line 5 column 3"),
+            "unexpected token at line 5 column 3"
         );
     }
 
@@ -97,24 +115,34 @@ mod tests {
     }
 }
 
+fn contains_secret_assignment(input: &str, lower: &str, key: &str) -> bool {
+    let Some(pos) = lower.find(key) else {
+        return false;
+    };
+    let after = input[pos + key.len()..].trim_start();
+    after.starts_with(':') || after.starts_with('=')
+}
+
 pub fn redact_secrets(input: &str) -> String {
-    const SECRET_KEYS: [&str; 5] = ["api_key", "apikey", "authorization", "token", "secret"];
+    const ASSIGNMENT_SECRET_KEYS: [&str; 9] = [
+        "api_key",
+        "api-key",
+        "apikey",
+        "authorization",
+        "image_base64",
+        "raw_response",
+        "request_body",
+        "token",
+        "secret",
+    ];
     let lower = input.to_lowercase();
-    if SECRET_KEYS.iter().any(|key| lower.contains(key)) {
-        // Check for Authorization header pattern (case-insensitive)
-        if lower.contains("authorization:") || lower.contains("bearer ") {
-            return "[redacted]".to_string();
-        }
-        // Check for key=value or key:value patterns with actual secret content
-        for key in &SECRET_KEYS {
-            if let Some(pos) = lower.find(key) {
-                let after = &input[pos + key.len()..];
-                let after_trimmed = after.trim_start();
-                if after_trimmed.starts_with(':') || after_trimmed.starts_with('=') {
-                    return "[redacted]".to_string();
-                }
-            }
-        }
+    if lower.contains("authorization:") || lower.contains("bearer ") {
+        return "[redacted]".to_string();
+    }
+    if ASSIGNMENT_SECRET_KEYS
+        .iter()
+        .any(|key| contains_secret_assignment(input, &lower, key))
+    {
         return "[redacted]".to_string();
     }
     input.chars().take(800).collect()

@@ -1,0 +1,28 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 *)",
+      "Bash(python *)",
+      "Bash(cargo test *)",
+      "Bash(npx tsc *)",
+      "Bash(npx vite *)",
+      "Bash(git add *)",
+      "Bash(git commit -m ' *)",
+      "Bash(code *)",
+      "Bash(cargo check *)",
+      "Bash(where python3 *)",
+      "Bash(where python *)",
+      "Bash(where py *)",
+      "Bash(cargo search *)",
+      "Bash(cargo build *)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:crates.io)",
+      "WebSearch",
+      "PowerShell(Get-Content *)",
+      "WebFetch(domain:docs.siliconflow.cn)",
+      "Bash(Test-Path *)",
+      "Bash(git -C \"D:/AIProject/slicer\" log --oneline --all)",
+      "Bash(git *)"
+    ]
+  }
+}

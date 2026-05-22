@@ -1,0 +1,25 @@
+{
+  "schema_version": "page_analysis_v1",
+  "page_id": "hash-1",
+  "image_hash": "hash-1",
+  "image_path": "pages/doc-1/hash-1.png",
+  "source": {
+    "document_id": "doc-1",
+    "page_number": 1,
+    "original_filename": "sample.pdf"
+  },
+  "analysis": {
+    "title": "标题",
+    "summary": "摘要",
+    "visible_text": "正文",
+    "topics": ["主题A"],
+    "keywords": ["关键词A"]
+  },
+  "retrieval": {
+    "bm25_text": "标题\n摘要\n正文\n主题A\n关键词A"
+  },
+  "model": {
+    "provider": "custom",
+    "model_name": "configured-model"
+  }
+}

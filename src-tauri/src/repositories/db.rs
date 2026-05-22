@@ -21,6 +21,21 @@ const MIGRATIONS: &[Migration] = &[
         name: "jobs_and_events",
         sql: include_str!("../../migrations/0002_jobs_and_events.sql"),
     },
+    Migration {
+        version: 3,
+        name: "documents_pages_images",
+        sql: include_str!("../../migrations/0003_documents_pages_images.sql"),
+    },
+    Migration {
+        version: 4,
+        name: "analysis_results",
+        sql: include_str!("../../migrations/0004_analysis_results.sql"),
+    },
+    Migration {
+        version: 5,
+        name: "index_versions",
+        sql: include_str!("../../migrations/0005_index_versions.sql"),
+    },
 ];
 
 pub fn block_on_db<T>(future: impl Future<Output = AppResult<T>>) -> AppResult<T> {
@@ -86,7 +101,11 @@ pub async fn run_migrations(path: PathBuf) -> AppResult<()> {
 }
 
 async fn execute_sql_script(connection: &mut SqliteConnection, script: &str) -> AppResult<()> {
-    for statement in script.split(';').map(str::trim).filter(|part| !part.is_empty()) {
+    for statement in script
+        .split(';')
+        .map(str::trim)
+        .filter(|part| !part.is_empty())
+    {
         connection
             .execute(statement)
             .await
@@ -116,8 +135,7 @@ mod tests {
 
     #[test]
     fn migrations_are_idempotent_and_create_minimal_ledger_tables() {
-        let root =
-            std::env::temp_dir().join(format!("slicer-db-migration-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("slicer-db-migration-{}", std::process::id()));
         let db_path = root.join("app.db");
         let _ = fs::remove_dir_all(&root);
         fs::create_dir_all(&root).expect("temp root");
@@ -127,7 +145,19 @@ mod tests {
 
         block_on_db(async {
             let mut connection = connect_workspace_db(db_path).await?;
-            for table in ["schema_migrations", "settings", "jobs", "errors", "job_events"] {
+            for table in [
+                "schema_migrations",
+                "settings",
+                "jobs",
+                "errors",
+                "job_events",
+                "documents",
+                "page_records",
+                "image_assets",
+                "analysis_results",
+                "index_versions",
+                "index_active",
+            ] {
                 let exists = sqlx::query_scalar::<_, i64>(
                     "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
                 )
@@ -136,23 +166,6 @@ mod tests {
                 .await
                 .map_err(|err| super::database_error("test", "table_lookup_failed", err))?;
                 assert_eq!(exists, 1, "{table} should exist");
-            }
-
-            for future_table in [
-                "documents",
-                "page_records",
-                "image_assets",
-                "analysis_results",
-                "index_versions",
-            ] {
-                let exists = sqlx::query_scalar::<_, i64>(
-                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
-                )
-                .bind(future_table)
-                .fetch_one(&mut connection)
-                .await
-                .map_err(|err| super::database_error("test", "table_lookup_failed", err))?;
-                assert_eq!(exists, 0, "{future_table} should stay deferred");
             }
             Ok(())
         })

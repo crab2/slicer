@@ -1,3 +1,4 @@
+use crate::domain::settings::AppSettingsDto;
 use crate::errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -9,6 +10,12 @@ pub struct BootstrapSettings {
     pub last_workspace_path: Option<String>,
 }
 
+#[derive(Debug, Default, Clone, Serialize)]
+struct AppSettingsFile {
+    pub libreoffice_path: Option<String>,
+}
+
+#[derive(Clone)]
 pub struct SettingsRepository {
     config_dir: PathBuf,
 }
@@ -49,20 +56,50 @@ impl SettingsRepository {
         )
     }
 
+    pub fn load_app_settings(&self) -> AppResult<AppSettingsDto> {
+        let path = self.app_settings_path();
+        if !path.exists() {
+            return Ok(AppSettingsDto::default());
+        }
+        let text = fs::read_to_string(&path).map_err(|err| {
+            AppError::io("settings", "settings_read_failed", err)
+                .with_details(path.display().to_string())
+        })?;
+        serde_json::from_str(&text).map_err(|err| {
+            AppError::new(
+                "settings_parse_failed",
+                "应用配置无法读取，已恢复默认设置。",
+                "settings",
+                true,
+            )
+            .with_details(err.to_string())
+        })
+    }
+
+    pub fn save_app_settings(&self, settings: &AppSettingsDto) -> AppResult<()> {
+        fs::create_dir_all(&self.config_dir)
+            .map_err(|err| AppError::io("settings", "settings_dir_failed", err))?;
+        self.write_json(
+            self.app_settings_path(),
+            &AppSettingsFile {
+                libreoffice_path: settings.libreoffice_path.clone(),
+            },
+        )
+    }
+
     fn bootstrap_path(&self) -> PathBuf {
         self.config_dir.join("bootstrap-workspace.json")
+    }
+
+    fn app_settings_path(&self) -> PathBuf {
+        self.config_dir.join("app-settings.json")
     }
 
     fn write_json<T: Serialize>(&self, path: PathBuf, value: &T) -> AppResult<()> {
         let tmp_path = path.with_extension("tmp");
         let json = serde_json::to_string_pretty(value).map_err(|err| {
-            AppError::new(
-                "bootstrap_serialize_failed",
-                "工作区配置写入失败。",
-                "restore",
-                true,
-            )
-            .with_details(err.to_string())
+            AppError::new("serialize_failed", "配置写入失败。", "settings", true)
+                .with_details(err.to_string())
         })?;
         {
             let mut file = OpenOptions::new()
@@ -70,11 +107,11 @@ impl SettingsRepository {
                 .truncate(true)
                 .write(true)
                 .open(&tmp_path)
-                .map_err(|err| AppError::io("restore", "bootstrap_write_failed", err))?;
+                .map_err(|err| AppError::io("settings", "settings_write_failed", err))?;
             file.write_all(json.as_bytes())
-                .map_err(|err| AppError::io("restore", "bootstrap_write_failed", err))?;
+                .map_err(|err| AppError::io("settings", "settings_write_failed", err))?;
         }
         fs::rename(&tmp_path, &path)
-            .map_err(|err| AppError::io("restore", "bootstrap_replace_failed", err))
+            .map_err(|err| AppError::io("settings", "settings_replace_failed", err))
     }
 }

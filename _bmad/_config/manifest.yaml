@@ -1,47 +1,47 @@
 installation:
-  version: 6.6.0
+  version: 6.7.1
   installDate: 2026-05-14T05:35:58.941Z
-  lastUpdated: 2026-05-14T05:35:58.941Z
+  lastUpdated: 2026-05-18T15:51:35.445Z
 modules:
   - name: core
-    version: 6.6.0
+    version: 6.7.1
     installDate: 2026-05-14T05:35:57.655Z
-    lastUpdated: 2026-05-14T05:35:58.647Z
+    lastUpdated: 2026-05-18T15:51:35.413Z
     source: built-in
     npmPackage: null
     repoUrl: null
   - name: bmm
-    version: 6.6.0
+    version: 6.7.1
     installDate: 2026-05-14T05:35:57.323Z
-    lastUpdated: 2026-05-14T05:35:58.650Z
+    lastUpdated: 2026-05-18T15:51:35.417Z
     source: built-in
     npmPackage: null
     repoUrl: null
   - name: bmb
     version: v1.8.0
     installDate: 2026-05-14T05:35:57.975Z
-    lastUpdated: 2026-05-14T05:35:58.754Z
+    lastUpdated: 2026-05-18T15:51:35.423Z
     source: external
     npmPackage: bmad-builder
     repoUrl: https://github.com/bmad-code-org/bmad-builder
-    channel: stable
+    channel: pinned
     sha: d64469f61fadc6cfbf2dea6a0a257fe6eb2790a2
   - name: cis
     version: v0.2.0
     installDate: 2026-05-14T05:35:58.111Z
-    lastUpdated: 2026-05-14T05:35:58.846Z
+    lastUpdated: 2026-05-18T15:51:35.429Z
     source: external
     npmPackage: bmad-creative-intelligence-suite
     repoUrl: https://github.com/bmad-code-org/bmad-module-creative-intelligence-suite
-    channel: stable
+    channel: pinned
     sha: 14a63b893c07173b7a6cfe0fb6a9a72ba51d3cf1
   - name: baut
-    version: v1.14.2
+    version: 1.14.2
     installDate: 2026-05-14T05:35:58.312Z
-    lastUpdated: 2026-05-14T05:35:58.941Z
-    source: external
-    npmPackage: bmad-story-automator
-    repoUrl: https://github.com/bmad-code-org/bmad-automator
+    lastUpdated: 2026-05-18T15:51:35.445Z
+    source: unknown
+    npmPackage: null
+    repoUrl: null
     channel: stable
     sha: 593f338532ea730b5c1a2dd86681e87b5b4f04dd
 ides:

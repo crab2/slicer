@@ -44,6 +44,14 @@ impl WorkspaceLayout {
         self.indexes_dir().join("bm25")
     }
 
+    pub fn bm25_active_pointer_path(&self) -> PathBuf {
+        self.bm25_index_dir().join("active.json")
+    }
+
+    pub fn bm25_build_dir(&self, version_id: &str) -> PathBuf {
+        self.bm25_index_dir().join(format!("build-{version_id}"))
+    }
+
     pub fn jobs_dir(&self) -> PathBuf {
         self.root.join("jobs")
     }

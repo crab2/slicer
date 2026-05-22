@@ -5,6 +5,16 @@ const API_KEY_USER: &str = "model_api_key";
 
 /// Store API key in OS credential storage (keyring).
 pub fn store_api_key(key: &str) -> AppResult<()> {
+    let key = key.trim();
+    if key.is_empty() {
+        return Err(AppError::new(
+            "api_key_empty",
+            "API key 不能为空。",
+            "security",
+            true,
+        ));
+    }
+
     let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_USER).map_err(|err| {
         AppError::new(
             "keyring_access_failed",
@@ -39,6 +49,7 @@ pub fn read_api_key() -> AppResult<Option<String>> {
         .with_details(err.to_string())
     })?;
     match entry.get_password() {
+        Ok(key) if key.trim().is_empty() => Ok(None),
         Ok(key) => Ok(Some(key)),
         Err(keyring::Error::NoEntry) => Ok(None),
         Err(err) => Err(AppError::new(
@@ -80,8 +91,5 @@ pub fn delete_api_key() -> AppResult<()> {
 
 /// Check if API key is configured (without reading the actual key).
 pub fn has_api_key() -> bool {
-    keyring::Entry::new(SERVICE_NAME, API_KEY_USER)
-        .and_then(|entry| entry.get_password())
-        .ok()
-        .is_some()
+    read_api_key().ok().flatten().is_some()
 }

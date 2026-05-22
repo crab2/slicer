@@ -33,6 +33,10 @@ export function WorkspacePicker({
 
       {status.error ? (
         <ErrorMessage title="工作区需要处理" message={status.error.message} />
+      ) : status.status === "missing" ? (
+        <ErrorMessage title="工作目录缺失" message="上次使用的工作目录已不可访问，请重新选择。" />
+      ) : status.status === "invalid" ? (
+        <ErrorMessage title="工作目录无效" message="所选目录不是有效的工作区，请重新选择。" />
       ) : null}
 
       <div className="action-row workbench-actions">
