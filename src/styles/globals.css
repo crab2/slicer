@@ -589,6 +589,23 @@ h3 {
   font-size: 13px;
 }
 
+.setting-help,
+.setting-message {
+  margin: 8px 0 0;
+  color: #52636a;
+  font-size: 13px;
+}
+
+.setting-message {
+  color: #1f5a43;
+}
+
+.link-button.setting-help-link {
+  margin: 0 2px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
 .setting-field,
 .setting-fields {
   margin-top: 10px;
@@ -640,6 +657,13 @@ h3 {
 .api-key-field input {
   flex: 1;
   min-width: 200px;
+}
+
+.setting-inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 10px;
 }
 
 .settings-actions {

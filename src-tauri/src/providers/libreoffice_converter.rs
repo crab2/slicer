@@ -1,5 +1,6 @@
 use crate::errors::{AppError, AppResult};
 use crate::providers::converter::DocumentConverter;
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -156,6 +157,120 @@ fn resolve_libreoffice_executable(configured_path: &str) -> AppResult<PathBuf> {
     .with_details(format!("configured_path: {}", configured_path)))
 }
 
+pub fn find_libreoffice_installation() -> Option<PathBuf> {
+    find_libreoffice_in_candidates(libreoffice_search_candidates())
+}
+
+fn find_libreoffice_in_candidates(candidates: Vec<PathBuf>) -> Option<PathBuf> {
+    let mut seen = HashSet::new();
+
+    for candidate in candidates {
+        let key = normalize_candidate_key(&candidate);
+        if !seen.insert(key) {
+            continue;
+        }
+
+        if let Some(path) = libreoffice_candidate_config_path(&candidate) {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn libreoffice_candidate_config_path(candidate: &Path) -> Option<PathBuf> {
+    if candidate.is_file() && is_libreoffice_executable(candidate) {
+        return Some(candidate.to_path_buf());
+    }
+
+    if candidate.is_dir() {
+        for executable_name in libreoffice_executable_names() {
+            if candidate.join(executable_name).is_file() {
+                return Some(candidate.to_path_buf());
+            }
+        }
+    }
+
+    None
+}
+
+fn libreoffice_search_candidates() -> Vec<PathBuf> {
+    let mut candidates = standard_libreoffice_search_dirs();
+
+    if let Some(path_var) = std::env::var_os("PATH") {
+        candidates.extend(std::env::split_paths(&path_var));
+    }
+
+    candidates
+}
+
+#[cfg(windows)]
+fn standard_libreoffice_search_dirs() -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    for env_key in ["ProgramFiles", "ProgramW6432", "ProgramFiles(x86)"] {
+        if let Some(root) = std::env::var_os(env_key) {
+            candidates.push(PathBuf::from(root).join("LibreOffice").join("program"));
+        }
+    }
+
+    candidates.push(PathBuf::from(r"C:\Program Files\LibreOffice\program"));
+    candidates.push(PathBuf::from(r"C:\Program Files (x86)\LibreOffice\program"));
+    candidates
+}
+
+#[cfg(target_os = "macos")]
+fn standard_libreoffice_search_dirs() -> Vec<PathBuf> {
+    vec![
+        PathBuf::from("/Applications/LibreOffice.app/Contents/MacOS"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/opt/homebrew/bin"),
+    ]
+}
+
+#[cfg(all(not(windows), not(target_os = "macos")))]
+fn standard_libreoffice_search_dirs() -> Vec<PathBuf> {
+    let mut candidates = vec![
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/opt/libreoffice/program"),
+        PathBuf::from("/snap/bin"),
+    ];
+
+    if let Some(home) = std::env::var_os("HOME") {
+        candidates.push(
+            PathBuf::from(home)
+                .join(".local")
+                .join("share")
+                .join("flatpak")
+                .join("exports")
+                .join("bin"),
+        );
+    }
+
+    candidates
+}
+
+fn is_libreoffice_executable(path: &Path) -> bool {
+    let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+        return false;
+    };
+
+    libreoffice_executable_names()
+        .iter()
+        .any(|name| file_name.eq_ignore_ascii_case(name))
+}
+
+#[cfg(windows)]
+fn normalize_candidate_key(path: &Path) -> String {
+    path.to_string_lossy().to_ascii_lowercase()
+}
+
+#[cfg(not(windows))]
+fn normalize_candidate_key(path: &Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
 #[cfg(windows)]
 fn libreoffice_executable_names() -> &'static [&'static str] {
     &["soffice.com", "soffice.exe", "libreoffice.exe"]
@@ -189,7 +304,7 @@ fn compact_process_text(text: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_libreoffice_executable;
+    use super::{find_libreoffice_in_candidates, resolve_libreoffice_executable};
     use std::fs;
     use std::path::{Path, PathBuf};
 
@@ -265,6 +380,30 @@ mod tests {
             resolve_libreoffice_executable(dir.to_str().expect("utf8 path")).expect_err("error");
 
         assert_eq!(err.code, "libreoffice_executable_not_found");
+        let _ = fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn finds_configurable_program_directory() {
+        let dir = unique_temp_dir("find-directory");
+        fs::create_dir_all(&dir).expect("temp dir");
+        create_launcher(&dir);
+
+        let found = find_libreoffice_in_candidates(vec![dir.clone()]).expect("found");
+
+        assert_eq!(found, dir);
+        let _ = fs::remove_dir_all(found);
+    }
+
+    #[test]
+    fn finds_direct_executable_candidate() {
+        let dir = unique_temp_dir("find-executable");
+        fs::create_dir_all(&dir).expect("temp dir");
+        let launcher = create_launcher(&dir);
+
+        let found = find_libreoffice_in_candidates(vec![launcher.clone()]).expect("found");
+
+        assert_eq!(found, launcher);
         let _ = fs::remove_dir_all(dir);
     }
 }

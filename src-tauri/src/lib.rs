@@ -27,8 +27,8 @@ use commands::search_commands::{
     get_index_status, get_page_image_preview, search_pages, start_index_rebuild,
 };
 use commands::settings_commands::{
-    accept_privacy_notice, delete_api_key, get_app_settings, get_model_configuration_status,
-    get_privacy_notice_status, save_api_key, save_app_settings,
+    accept_privacy_notice, delete_api_key, find_libreoffice_path, get_app_settings,
+    get_model_configuration_status, get_privacy_notice_status, save_api_key, save_app_settings,
 };
 use commands::workspace_commands::{get_workspace_status, select_workspace};
 use services::api_server_service::ApiServerService;
@@ -83,6 +83,7 @@ pub fn run() {
             select_workspace,
             get_app_settings,
             save_app_settings,
+            find_libreoffice_path,
             save_api_key,
             delete_api_key,
             get_model_configuration_status,

@@ -2,6 +2,7 @@ use crate::domain::settings::{
     AppSettingsDto, ModelConfigurationStatusDto, PrivacyNoticeStatusDto,
 };
 use crate::errors::AppError;
+use crate::providers::libreoffice_converter;
 use crate::services::api_server_service::ApiServerService;
 use crate::services::settings_service::SettingsService;
 use crate::services::workspace_service::WorkspaceService;
@@ -50,4 +51,10 @@ pub fn get_privacy_notice_status(
 #[tauri::command]
 pub fn accept_privacy_notice(workspace: State<'_, WorkspaceService>) -> Result<(), AppError> {
     SettingsService::accept_privacy_notice(&workspace)
+}
+
+#[tauri::command]
+pub fn find_libreoffice_path() -> Option<String> {
+    libreoffice_converter::find_libreoffice_installation()
+        .map(|path| path.to_string_lossy().to_string())
 }

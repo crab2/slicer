@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { revealItemInDir } from "@tauri-apps/plugin-opener";
+import { openUrl, revealItemInDir } from "@tauri-apps/plugin-opener";
 import type {
   AnalysisBatchResultDto,
   AnalysisResultDto,
@@ -88,6 +88,10 @@ export const tauriClient = {
   getAppSettings: () => callTauriCommand<AppSettingsDto>("get_app_settings"),
   saveAppSettings: (settings: AppSettingsDto) =>
     callTauriCommand<void>("save_app_settings", { settings }),
+  findLibreOfficePath: () => callTauriCommand<string | null>("find_libreoffice_path"),
+  openLibreOfficeDirectoryDialog: () =>
+    open({ directory: true, multiple: false }),
+  openExternalUrl: (url: string) => openUrl(url),
   saveApiKey: (key: string) => callTauriCommand<void>("save_api_key", { key }),
   deleteApiKey: () => callTauriCommand<void>("delete_api_key"),
   getModelConfigurationStatus: () =>

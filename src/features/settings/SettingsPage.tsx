@@ -11,6 +11,8 @@ import type {
 import { ApiServerSettings } from "./components/ApiServerSettings";
 import { WorkspaceSettings } from "./components/WorkspaceSettings";
 
+const LIBREOFFICE_DOWNLOAD_URL = "https://zh-cn.libreoffice.org/download/libreoffice/";
+
 interface SettingsPageProps {
   workspaceStatus: WorkspaceStatusDto;
   isWorkspaceLoading: boolean;
@@ -27,6 +29,8 @@ export function SettingsPage({
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<{ message: string; correlationId?: string | null } | null>(null);
   const [saved, setSaved] = useState(false);
+  const [isFindingLibreOffice, setIsFindingLibreOffice] = useState(false);
+  const [libreOfficeMessage, setLibreOfficeMessage] = useState<string | null>(null);
   const [apiRuntimeStatus, setApiRuntimeStatus] =
     useState<ApiServerStatusDto | null>(null);
 
@@ -140,6 +144,49 @@ export function SettingsPage({
     }
   }
 
+  async function handleFindLibreOfficePath() {
+    if (!settings) return;
+    setIsFindingLibreOffice(true);
+    setError(null);
+    setLibreOfficeMessage(null);
+    try {
+      const path = await tauriClient.findLibreOfficePath();
+      if (path) {
+        updateField("libreoffice_path", path);
+        setLibreOfficeMessage("已找到 LibreOffice，保存设置后生效。");
+      } else {
+        setLibreOfficeMessage("没有自动找到 LibreOffice。请先安装，或点击“选择目录”手动配置安装目录。");
+      }
+    } catch (e) {
+      setError(extractError(e));
+    } finally {
+      setIsFindingLibreOffice(false);
+    }
+  }
+
+  async function handleChooseLibreOfficePath() {
+    setError(null);
+    setLibreOfficeMessage(null);
+    try {
+      const selected = await tauriClient.openLibreOfficeDirectoryDialog();
+      if (typeof selected === "string") {
+        updateField("libreoffice_path", selected);
+        setLibreOfficeMessage("已填入所选目录，保存设置后生效。");
+      }
+    } catch (e) {
+      setError(extractError(e));
+    }
+  }
+
+  async function handleOpenLibreOfficeDownload() {
+    setError(null);
+    try {
+      await tauriClient.openExternalUrl(LIBREOFFICE_DOWNLOAD_URL);
+    } catch (e) {
+      setError(extractError(e));
+    }
+  }
+
   function updateField<K extends keyof AppSettingsDto>(
     key: K,
     value: AppSettingsDto[K],
@@ -192,7 +239,18 @@ export function SettingsPage({
         <div>
           <h2>LibreOffice</h2>
           <p className="muted-copy">
-            用于后续 Office 文档转换。配置后会在导入 DOC/PPT 时自动调用。
+            LibreOffice 是免费的 Office 套件，本应用会调用它把 DOC、DOCX、PPT、PPTX 转成 PDF 后导入。
+          </p>
+          <p className="setting-help">
+            如果还没有安装，请先打开
+            <button
+              type="button"
+              className="link-button setting-help-link"
+              onClick={handleOpenLibreOfficeDownload}
+            >
+              官方下载页
+            </button>
+            完成安装；安装后可自动搜索，或手动选择 LibreOffice 的安装目录。
           </p>
           <div className="setting-field">
             <label>
@@ -201,12 +259,24 @@ export function SettingsPage({
                 type="text"
                 placeholder="C:/Program Files/LibreOffice/program 或 .../soffice.exe"
                 value={settings.libreoffice_path ?? ""}
-                onChange={(e) =>
-                  updateField("libreoffice_path", e.target.value || null)
-                }
+                onChange={(e) => {
+                  setLibreOfficeMessage(null);
+                  updateField("libreoffice_path", e.target.value || null);
+                }}
               />
             </label>
           </div>
+          <div className="setting-inline-actions">
+            <Button onClick={handleFindLibreOfficePath} disabled={isFindingLibreOffice}>
+              {isFindingLibreOffice ? "搜索中" : "自动搜索"}
+            </Button>
+            <Button onClick={handleChooseLibreOfficePath}>
+              选择目录
+            </Button>
+          </div>
+          {libreOfficeMessage ? (
+            <p className="setting-message">{libreOfficeMessage}</p>
+          ) : null}
         </div>
         <StatusBadge>
           {settings.libreoffice_path ? "已配置" : "未配置"}
