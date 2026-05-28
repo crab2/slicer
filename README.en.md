@@ -54,7 +54,7 @@ The project is built with Tauri, React, TypeScript, and Rust. Windows is the fir
 ### Optional
 
 1. LibreOffice: required for importing DOC, DOCX, PPT, and PPTX files. It is not required if you only import PDF files.
-2. Multimodal model API: required for page analysis. SLICER supports OpenAI, Anthropic, SiliconFlow, OpenAI-compatible endpoints, custom HTTP, and the local test provider `local_mock`.
+2. Multimodal model API: required for page analysis. SLICER supports SiliconFlow, MiMo, OpenAI, and Anthropic.
 
 ## Install From Source
 
@@ -166,7 +166,7 @@ Open Settings and fill in the model configuration:
 
 The API key is saved through system credential storage and is not written to ordinary config files. Before cloud model analysis is enabled, the app shows a privacy notice explaining that page images will be sent to the configured model service.
 
-If you only want to test the local flow, choose the `local_mock` provider.
+Model analysis requires a supported remote vision provider and privacy notice confirmation.
 
 ### 5. Analyze Pages
 

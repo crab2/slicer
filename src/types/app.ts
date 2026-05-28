@@ -226,3 +226,16 @@ export interface ApiServerStatusDto {
   enabled: boolean;
   last_error: AppErrorDto | null;
 }
+
+export interface ApiKeyRecordDto {
+  key_id: string;
+  provider: string;
+  label: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ApiKeyListDto {
+  keys: ApiKeyRecordDto[];
+}

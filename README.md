@@ -54,7 +54,7 @@ SLICER 是一个本地优先的桌面文档切片与检索工具。它可以把 
 ### 可选环境
 
 1. LibreOffice：导入 DOC、DOCX、PPT、PPTX 时需要。只导入 PDF 时可以不配置。
-2. 多模态模型 API：需要页面分析时配置。支持 OpenAI、Anthropic、SiliconFlow、OpenAI-compatible、自定义 HTTP，以及本地测试用 `local_mock`。
+2. 多模态模型 API：需要页面分析时配置。支持硅基流动 SiliconFlow、MiMo、OpenAI 和 Anthropic。
 
 ## 从源码安装
 
@@ -166,7 +166,7 @@ C:/Program Files/LibreOffice/program/soffice.exe
 
 API Key 通过系统密钥存储保存，不会写入普通配置文件。启用云端模型分析前，应用会提示页面图片会发送到用户配置的模型服务。
 
-如果只是想本地试用流程，可以选择 `local_mock` provider。
+模型分析必须配置受支持的远程视觉模型 provider，并确认隐私提示。
 
 ### 5. 分析页面
 

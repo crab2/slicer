@@ -441,6 +441,16 @@ export function WorkbenchPage({
     }
     void refreshJobs();
     void refreshDocuments();
+    void (async () => {
+      setIsModelStatusLoading(true);
+      try {
+        setModelStatus(await tauriClient.getModelConfigurationStatus());
+      } catch {
+        setModelStatus(null);
+      } finally {
+        setIsModelStatusLoading(false);
+      }
+    })();
   }, [workspaceReady, isActive]);
 
   const hasRunningAnalysis = useMemo(() => {

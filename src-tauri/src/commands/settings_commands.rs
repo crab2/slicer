@@ -1,5 +1,5 @@
 use crate::domain::settings::{
-    AppSettingsDto, ModelConfigurationStatusDto, PrivacyNoticeStatusDto,
+    ApiKeyListDto, AppSettingsDto, ModelConfigurationStatusDto, PrivacyNoticeStatusDto,
 };
 use crate::errors::AppError;
 use crate::providers::libreoffice_converter;
@@ -30,8 +30,52 @@ pub fn save_api_key(key: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+pub fn save_provider_api_key(provider: String, key: String) -> Result<(), AppError> {
+    SettingsService::save_api_key_for_provider(&provider, &key)
+}
+
+#[tauri::command]
+pub fn list_api_keys(workspace: State<'_, WorkspaceService>) -> Result<ApiKeyListDto, AppError> {
+    SettingsService::list_api_keys(&workspace)
+}
+
+#[tauri::command]
+pub fn add_api_key(
+    provider: String,
+    label: String,
+    key: String,
+    activate: bool,
+    workspace: State<'_, WorkspaceService>,
+) -> Result<ApiKeyListDto, AppError> {
+    SettingsService::add_api_key(&workspace, &provider, &label, &key, activate)
+}
+
+#[tauri::command]
+pub fn activate_api_key(
+    provider: String,
+    key_id: String,
+    workspace: State<'_, WorkspaceService>,
+) -> Result<ApiKeyListDto, AppError> {
+    SettingsService::activate_api_key(&workspace, &provider, &key_id)
+}
+
+#[tauri::command]
+pub fn delete_api_key_record(
+    provider: String,
+    key_id: String,
+    workspace: State<'_, WorkspaceService>,
+) -> Result<ApiKeyListDto, AppError> {
+    SettingsService::delete_api_key_record(&workspace, &provider, &key_id)
+}
+
+#[tauri::command]
 pub fn delete_api_key() -> Result<(), AppError> {
     SettingsService::delete_api_key()
+}
+
+#[tauri::command]
+pub fn delete_provider_api_key(provider: String) -> Result<(), AppError> {
+    SettingsService::delete_api_key_for_provider(&provider)
 }
 
 #[tauri::command]

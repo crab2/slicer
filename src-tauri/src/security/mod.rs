@@ -2,9 +2,25 @@ use crate::errors::{AppError, AppResult};
 
 const SERVICE_NAME: &str = "slicer";
 const API_KEY_USER: &str = "model_api_key";
+const SILICONFLOW_API_KEY_USER: &str = "model_api_key_siliconflow";
+const OPENAI_API_KEY_USER: &str = "model_api_key_openai";
+const ANTHROPIC_API_KEY_USER: &str = "model_api_key_anthropic";
+const API_KEY_USER_PREFIX: &str = "model_api_key:";
 
 /// Store API key in OS credential storage (keyring).
 pub fn store_api_key(key: &str) -> AppResult<()> {
+    store_api_key_for_user(API_KEY_USER, key)
+}
+
+pub fn store_api_key_for_provider(provider: &str, key: &str) -> AppResult<()> {
+    store_api_key_for_user(api_key_user_for_provider(provider), key)
+}
+
+pub fn store_api_key_for_id(key_id: &str, key: &str) -> AppResult<()> {
+    store_api_key_for_user(&api_key_user_for_id(key_id), key)
+}
+
+fn store_api_key_for_user(user: &str, key: &str) -> AppResult<()> {
     let key = key.trim();
     if key.is_empty() {
         return Err(AppError::new(
@@ -15,7 +31,7 @@ pub fn store_api_key(key: &str) -> AppResult<()> {
         ));
     }
 
-    let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_USER).map_err(|err| {
+    let entry = keyring::Entry::new(SERVICE_NAME, user).map_err(|err| {
         AppError::new(
             "keyring_access_failed",
             "无法访问系统密钥存储，请检查系统凭据管理器。",
@@ -37,9 +53,16 @@ pub fn store_api_key(key: &str) -> AppResult<()> {
     Ok(())
 }
 
-/// Read API key from OS credential storage.
-pub fn read_api_key() -> AppResult<Option<String>> {
-    let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_USER).map_err(|err| {
+pub fn read_api_key_for_provider(provider: &str) -> AppResult<Option<String>> {
+    read_api_key_for_user(api_key_user_for_provider(provider))
+}
+
+pub fn read_api_key_for_id(key_id: &str) -> AppResult<Option<String>> {
+    read_api_key_for_user(&api_key_user_for_id(key_id))
+}
+
+fn read_api_key_for_user(user: &str) -> AppResult<Option<String>> {
+    let entry = keyring::Entry::new(SERVICE_NAME, user).map_err(|err| {
         AppError::new(
             "keyring_access_failed",
             "无法访问系统密钥存储，请检查系统凭据管理器。",
@@ -64,7 +87,19 @@ pub fn read_api_key() -> AppResult<Option<String>> {
 
 /// Delete API key from OS credential storage.
 pub fn delete_api_key() -> AppResult<()> {
-    let entry = keyring::Entry::new(SERVICE_NAME, API_KEY_USER).map_err(|err| {
+    delete_api_key_for_user(API_KEY_USER)
+}
+
+pub fn delete_api_key_for_provider(provider: &str) -> AppResult<()> {
+    delete_api_key_for_user(api_key_user_for_provider(provider))
+}
+
+pub fn delete_api_key_for_id(key_id: &str) -> AppResult<()> {
+    delete_api_key_for_user(&api_key_user_for_id(key_id))
+}
+
+fn delete_api_key_for_user(user: &str) -> AppResult<()> {
+    let entry = keyring::Entry::new(SERVICE_NAME, user).map_err(|err| {
         AppError::new(
             "keyring_access_failed",
             "无法访问系统密钥存储，请检查系统凭据管理器。",
@@ -89,7 +124,42 @@ pub fn delete_api_key() -> AppResult<()> {
     }
 }
 
-/// Check if API key is configured (without reading the actual key).
-pub fn has_api_key() -> bool {
-    read_api_key().ok().flatten().is_some()
+fn api_key_user_for_provider(provider: &str) -> &'static str {
+    match provider.trim().to_ascii_lowercase().as_str() {
+        "siliconflow" => SILICONFLOW_API_KEY_USER,
+        "openai" => OPENAI_API_KEY_USER,
+        "anthropic" => ANTHROPIC_API_KEY_USER,
+        _ => API_KEY_USER,
+    }
+}
+
+fn api_key_user_for_id(key_id: &str) -> String {
+    format!("{API_KEY_USER_PREFIX}{}", key_id.trim())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{api_key_user_for_id, api_key_user_for_provider};
+
+    #[test]
+    fn siliconflow_uses_dedicated_keyring_user() {
+        assert_eq!(
+            api_key_user_for_provider("siliconflow"),
+            "model_api_key_siliconflow"
+        );
+        assert_eq!(api_key_user_for_provider("mimo"), "model_api_key");
+        assert_eq!(api_key_user_for_provider("openai"), "model_api_key_openai");
+        assert_eq!(
+            api_key_user_for_provider("anthropic"),
+            "model_api_key_anthropic"
+        );
+    }
+
+    #[test]
+    fn key_id_uses_dedicated_keyring_user() {
+        assert_eq!(
+            api_key_user_for_id("abc-123"),
+            "model_api_key:abc-123".to_string()
+        );
+    }
 }

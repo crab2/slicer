@@ -9,10 +9,9 @@ use crate::domain::settings::AppSettingsDto;
 use crate::errors::{AppError, AppResult};
 use crate::jobs::job_orchestrator::JobOrchestrator;
 use crate::providers::model::anthropic_provider::AnthropicProvider;
-use crate::providers::model::custom_http_provider::CustomHttpModelProvider;
-use crate::providers::model::mock_provider::MockModelProvider;
+use crate::providers::model::mimo_provider::MimoProvider;
 use crate::providers::model::openai_provider::OpenAIProvider;
-use crate::providers::model::prompt_template::page_analysis_prompt;
+use crate::providers::model::prompt_template::{page_analysis_prompt, page_analysis_repair_prompt};
 use crate::providers::model::provider::{
     ModelAnalysisRequest, ModelAnalysisResponse, ModelProvider,
 };
@@ -24,13 +23,21 @@ use crate::repositories::document_repository::DocumentRepository;
 use crate::services::settings_service::SettingsService;
 use crate::services::workspace_service::WorkspaceService;
 use chrono::Utc;
+use image::codecs::jpeg::JpegEncoder;
+use image::imageops::FilterType;
+use image::GenericImageView;
 use serde_json::Value;
 use sqlx::SqliteConnection;
 use std::collections::VecDeque;
 use std::fs;
+use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 pub struct AnalysisService;
+
+const MODEL_IMAGE_MAX_SIDE: u32 = 1280;
+const MODEL_IMAGE_JPEG_QUALITY: u8 = 75;
+const MODEL_IMAGE_REENCODE_MIN_BYTES: usize = 512 * 1024;
 
 impl AnalysisService {
     pub fn analyze_page(
@@ -272,11 +279,21 @@ impl AnalysisService {
 
         let provider_name = settings.model_provider.trim().to_string();
         let endpoint = match provider_name.as_str() {
+            #[cfg(test)]
             "local_mock" => "local://mock".to_string(),
+            "mimo" => MimoProvider::request_endpoint(&settings)?,
             "openai" => OpenAIProvider::request_endpoint(&settings)?,
             "anthropic" => AnthropicProvider::request_endpoint(&settings)?,
             "siliconflow" => SiliconFlowProvider::request_endpoint(&settings)?,
-            _ => CustomHttpModelProvider::request_endpoint(&settings)?,
+            _ => {
+                return Err(AppError::new(
+                    "model_provider_unsupported",
+                    "模型 provider 不受支持，请选择硅基流动、MiMo、OpenAI 或 Anthropic。",
+                    "analysis",
+                    true,
+                )
+                .with_details(format!("provider={provider_name}")));
+            }
         };
 
         Ok((
@@ -298,22 +315,18 @@ impl AnalysisService {
         refresh_jsonl_after_success: bool,
         provider_override: Option<&dyn ModelProvider>,
     ) -> AppResult<AnalysisResultDto> {
-        let (expected_page, image_bytes) =
+        let (expected_page, image_bytes, image_mime_type) =
             Self::prepare_page_for_analysis(workspace, layout, page_id, force_reanalysis)?;
-        let prompt = if context.provider_name == "siliconflow" {
-            Self::siliconflow_image_interpretation_prompt(&expected_page)
-        } else {
-            page_analysis_prompt(
-                "中文",
-                &expected_page,
-                &context.provider_name,
-                &context.model_name,
-            )
-        };
+        let prompt = page_analysis_prompt(
+            "中文",
+            &expected_page,
+            &context.provider_name,
+            &context.model_name,
+        );
 
         let request = ModelAnalysisRequest {
             image_bytes,
-            image_mime_type: "image/png".to_string(),
+            image_mime_type,
             prompt,
             model_name: context.model_name.clone(),
             provider: context.provider_name.clone(),
@@ -321,25 +334,41 @@ impl AnalysisService {
             expected_page: expected_page.clone(),
         };
 
-        let default_mock = MockModelProvider;
+        #[cfg(test)]
+        let default_mock = crate::providers::model::mock_provider::MockModelProvider;
+        let default_mimo = MimoProvider;
         let default_openai = OpenAIProvider;
         let default_anthropic = AnthropicProvider;
         let default_siliconflow = SiliconFlowProvider;
-        let default_custom = CustomHttpModelProvider;
         let provider: &dyn ModelProvider = if let Some(provider) = provider_override {
             provider
         } else {
             match context.provider_name.as_str() {
+                #[cfg(test)]
                 "local_mock" => &default_mock,
+                "mimo" => &default_mimo,
                 "openai" => &default_openai,
                 "anthropic" => &default_anthropic,
                 "siliconflow" => &default_siliconflow,
-                _ => &default_custom,
+                _ => {
+                    return Err(AppError::new(
+                        "model_provider_unsupported",
+                        "模型 provider 不受支持，请选择硅基流动、MiMo、OpenAI 或 Anthropic。",
+                        "analysis",
+                        true,
+                    )
+                    .with_details(format!("provider={}", context.provider_name)));
+                }
             }
         };
 
         let provider_response = provider.analyze_page(&request)?;
-        let analysis = Self::normalize_provider_response(&provider_response, &expected_page)?;
+        let analysis = Self::normalize_provider_response_with_retry(
+            &request,
+            provider,
+            &provider_response,
+            &expected_page,
+        )?;
         let result_json = serde_json::to_string(&analysis).map_err(|err| {
             AppError::new(
                 "analysis_result_serialize_failed",
@@ -360,6 +389,55 @@ impl AnalysisService {
         )
     }
 
+    fn normalize_provider_response_with_retry(
+        request: &ModelAnalysisRequest,
+        provider: &dyn ModelProvider,
+        response: &ModelAnalysisResponse,
+        expected_page: &ExpectedPageContext,
+    ) -> AppResult<PageAnalysisV1> {
+        match Self::normalize_provider_response(response, expected_page) {
+            Ok(analysis) => Ok(analysis),
+            Err(err) if Self::should_retry_format(&err) => {
+                let mut retry_request = request.clone();
+                retry_request.prompt = page_analysis_repair_prompt(
+                    "中文",
+                    expected_page,
+                    &request.provider,
+                    &request.model_name,
+                    &Self::validation_retry_summary(&err),
+                );
+                let retry_response = provider.analyze_page(&retry_request)?;
+                match Self::normalize_provider_response(&retry_response, expected_page) {
+                    Ok(analysis) => Ok(analysis),
+                    Err(retry_err) if Self::can_fallback_to_text_analysis(&retry_err) => {
+                        let fallback_response = if retry_response.raw_json.trim().is_empty() {
+                            response
+                        } else {
+                            &retry_response
+                        };
+                        tracing::warn!(
+                            target: "analysis",
+                            provider = %request.provider,
+                            model = %request.model_name,
+                            page_id = %expected_page.page_id,
+                            "model returned non-json page analysis after repair retry; saving text fallback"
+                        );
+                        Self::fallback_text_analysis(fallback_response, expected_page)
+                    }
+                    Err(retry_err) => {
+                        let retry_summary = Self::validation_retry_summary(&retry_err);
+                        Err(retry_err.with_details(format!(
+                            "first_validation_error={}; retry_validation_error={}",
+                            Self::validation_retry_summary(&err),
+                            retry_summary
+                        )))
+                    }
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
     fn normalize_provider_response(
         response: &ModelAnalysisResponse,
         expected_page: &ExpectedPageContext,
@@ -372,47 +450,44 @@ impl AnalysisService {
                 }
                 Ok(analysis)
             }
-            Err(err) if Self::can_wrap_model_content(&err, response) => {
-                Self::wrap_model_content_as_page_analysis(response, expected_page)
-            }
             Err(err) => Err(err),
         }
     }
 
-    fn siliconflow_image_interpretation_prompt(expected_page: &ExpectedPageContext) -> String {
-        format!(
-            "Describe this page image in Chinese. Include visible text, title-like text, key topics, and useful layout cues. Return plain text only. page_id={}; image_hash={}; image_path={}",
-            expected_page.page_id, expected_page.image_hash, expected_page.image_path
+    fn should_retry_format(error: &AppError) -> bool {
+        matches!(
+            error.code.as_str(),
+            "analysis_json_invalid"
+                | "analysis_field_missing"
+                | "analysis_schema_version_unsupported"
+                | "analysis_field_invalid"
+                | "analysis_retrieval_text_missing"
         )
     }
 
-    fn can_wrap_model_content(error: &AppError, response: &ModelAnalysisResponse) -> bool {
-        response.provider == "siliconflow"
-            && matches!(
-                error.code.as_str(),
-                "analysis_json_invalid"
-                    | "analysis_field_missing"
-                    | "analysis_schema_version_unsupported"
-                    | "analysis_field_invalid"
-                    | "analysis_retrieval_text_missing"
-            )
+    fn can_fallback_to_text_analysis(error: &AppError) -> bool {
+        error.code == "analysis_json_invalid"
+            && error
+                .details
+                .as_deref()
+                .is_some_and(|details| details.contains("no complete JSON object found"))
     }
 
-    fn wrap_model_content_as_page_analysis(
+    fn fallback_text_analysis(
         response: &ModelAnalysisResponse,
         expected_page: &ExpectedPageContext,
     ) -> AppResult<PageAnalysisV1> {
         let content = response.raw_json.trim();
-        if content.is_empty() {
-            return Err(AppError::new(
-                "model_response_content_empty",
-                "Model returned an empty image description.",
-                "analysis_provider",
-                true,
-            ));
-        }
-
-        let sanitized_content = Self::truncate_chars(content, 50_000);
+        let visible_text = if content.is_empty() {
+            "模型未返回结构化 JSON，原始响应已保留。".to_string()
+        } else {
+            Self::truncate_chars(content, 50_000)
+        };
+        let bm25_text = if visible_text.trim().is_empty() {
+            format!("第 {} 页 页面图片", expected_page.page_number)
+        } else {
+            visible_text.clone()
+        };
         let raw_response = response
             .provider_response_json
             .as_deref()
@@ -429,18 +504,13 @@ impl AnalysisService {
                 original_filename: None,
             },
             analysis: PageAnalysisContent {
-                title: Some(format!(
-                    "Page {} image description",
-                    expected_page.page_number
-                )),
-                summary: Some(Self::summarize_model_content(&sanitized_content)),
-                visible_text: Some(sanitized_content.clone()),
-                topics: vec!["image description".to_string()],
+                title: Some(format!("第 {} 页分析", expected_page.page_number)),
+                summary: Some(Self::summarize_model_content(&visible_text)),
+                visible_text: Some(visible_text),
+                topics: vec!["页面分析".to_string()],
                 keywords: vec![],
             },
-            retrieval: PageRetrievalFields {
-                bm25_text: sanitized_content,
-            },
+            retrieval: PageRetrievalFields { bm25_text },
             model: PageAnalysisModelInfo {
                 provider: response.provider.clone(),
                 model_name: response.model_name.clone(),
@@ -450,6 +520,17 @@ impl AnalysisService {
                 raw_json: Self::sanitize_provider_response_json(raw_response),
             }),
         })
+    }
+
+    fn validation_retry_summary(error: &AppError) -> String {
+        match &error.details {
+            Some(details) => format!(
+                "code={}; details={}",
+                error.code,
+                Self::truncate_chars(details, 500)
+            ),
+            None => format!("code={}", error.code),
+        }
     }
 
     fn provider_response_record(
@@ -470,7 +551,7 @@ impl AnalysisService {
         layout: &crate::artifacts::workspace_layout::WorkspaceLayout,
         page_id: &str,
         force_reanalysis: bool,
-    ) -> AppResult<(ExpectedPageContext, Vec<u8>)> {
+    ) -> AppResult<(ExpectedPageContext, Vec<u8>, String)> {
         let (expected_page, image_path, relative_image_path) = {
             let mut conn = workspace.get_db_connection()?;
             let page =
@@ -532,13 +613,69 @@ impl AnalysisService {
             )
         };
 
-        let image_bytes = fs::read(&image_path).map_err(|err| {
+        let original_image_bytes = fs::read(&image_path).map_err(|err| {
             AppError::io("analysis", "page_image_read_failed", err).with_details(format!(
                 "page_id={page_id}; image_path={relative_image_path}"
             ))
         })?;
+        let (image_bytes, image_mime_type) = Self::optimize_image_for_model(&original_image_bytes)
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    target: "analysis",
+                    page_id,
+                    image_path = %relative_image_path,
+                    "model image optimization failed; using original PNG"
+                );
+                (original_image_bytes, "image/png".to_string())
+            });
 
-        Ok((expected_page, image_bytes))
+        Ok((expected_page, image_bytes, image_mime_type))
+    }
+
+    fn optimize_image_for_model(image_bytes: &[u8]) -> AppResult<(Vec<u8>, String)> {
+        let image = image::load_from_memory(image_bytes).map_err(|err| {
+            AppError::new(
+                "model_image_decode_failed",
+                "page image could not be decoded for model optimization",
+                "analysis",
+                true,
+            )
+            .with_details(err.to_string())
+        })?;
+        let (width, height) = image.dimensions();
+        let should_resize = width.max(height) > MODEL_IMAGE_MAX_SIDE;
+        let should_reencode = should_resize || image_bytes.len() > MODEL_IMAGE_REENCODE_MIN_BYTES;
+        if !should_reencode {
+            return Ok((image_bytes.to_vec(), "image/png".to_string()));
+        }
+
+        let optimized = if should_resize {
+            image.resize(
+                MODEL_IMAGE_MAX_SIDE,
+                MODEL_IMAGE_MAX_SIDE,
+                FilterType::Triangle,
+            )
+        } else {
+            image
+        };
+
+        let rgb = optimized.to_rgb8();
+        let mut jpeg_bytes = Vec::new();
+        {
+            let mut cursor = Cursor::new(&mut jpeg_bytes);
+            let mut encoder = JpegEncoder::new_with_quality(&mut cursor, MODEL_IMAGE_JPEG_QUALITY);
+            encoder.encode_image(&rgb).map_err(|err| {
+                AppError::new(
+                    "model_image_encode_failed",
+                    "page image could not be encoded for model input",
+                    "analysis",
+                    true,
+                )
+                .with_details(err.to_string())
+            })?;
+        }
+
+        Ok((jpeg_bytes, "image/jpeg".to_string()))
     }
 
     fn run_batch_pages(
@@ -1018,6 +1155,10 @@ impl AnalysisService {
         Ok(())
     }
 
+    fn truncate_chars(value: &str, max_chars: usize) -> String {
+        value.chars().take(max_chars).collect()
+    }
+
     fn summarize_model_content(content: &str) -> String {
         let first_line = content
             .lines()
@@ -1025,10 +1166,6 @@ impl AnalysisService {
             .find(|line| !line.is_empty())
             .unwrap_or(content.trim());
         Self::truncate_chars(first_line, 240)
-    }
-
-    fn truncate_chars(value: &str, max_chars: usize) -> String {
-        value.chars().take(max_chars).collect()
     }
 
     fn sanitize_provider_response_json(raw_json: &str) -> String {
@@ -1112,7 +1249,7 @@ enum BatchPageOutcome {
 
 #[cfg(test)]
 mod tests {
-    use super::AnalysisService;
+    use super::{AnalysisService, MODEL_IMAGE_MAX_SIDE, MODEL_IMAGE_REENCODE_MIN_BYTES};
     use crate::api::state::ApiAppState;
     use crate::domain::analysis::PAGE_ANALYSIS_SCHEMA_VERSION;
     use crate::domain::settings::AppSettingsDto;
@@ -1128,6 +1265,7 @@ mod tests {
     use crate::repositories::workspace_settings_repository::WorkspaceSettingsRepository;
     use crate::services::api_server_service::ApiServerService;
     use crate::services::workspace_service::WorkspaceService;
+    use image::GenericImageView;
     use std::fs;
     use std::sync::Arc;
 
@@ -1157,6 +1295,47 @@ mod tests {
 
     fn configure_mock(service: &WorkspaceService) {
         configure_mock_with_concurrency(service, 2);
+    }
+
+    #[test]
+    fn model_image_optimization_downscales_and_reencodes_to_jpeg() {
+        let image = image::RgbImage::from_pixel(2400, 1600, image::Rgb([255, 255, 255]));
+        let mut png_bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode png");
+
+        let (optimized, mime_type) =
+            AnalysisService::optimize_image_for_model(&png_bytes).expect("optimize image");
+        let decoded = image::load_from_memory(&optimized).expect("decode optimized image");
+
+        assert_eq!(mime_type, "image/jpeg");
+        assert_eq!(
+            decoded.dimensions().0.max(decoded.dimensions().1),
+            MODEL_IMAGE_MAX_SIDE
+        );
+    }
+
+    #[test]
+    fn model_image_optimization_keeps_small_png_without_reencoding() {
+        let image = image::RgbImage::from_pixel(320, 240, image::Rgb([255, 255, 255]));
+        let mut png_bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(image)
+            .write_to(
+                &mut std::io::Cursor::new(&mut png_bytes),
+                image::ImageFormat::Png,
+            )
+            .expect("encode png");
+        assert!(png_bytes.len() < MODEL_IMAGE_REENCODE_MIN_BYTES);
+
+        let (optimized, mime_type) =
+            AnalysisService::optimize_image_for_model(&png_bytes).expect("optimize image");
+
+        assert_eq!(mime_type, "image/png");
+        assert_eq!(optimized, png_bytes);
     }
 
     fn configure_mock_with_concurrency(service: &WorkspaceService, analysis_concurrency: u8) {
@@ -1228,6 +1407,14 @@ mod tests {
         (document.document_id, page)
     }
 
+    fn analysis_context(provider_name: &str, model_name: &str) -> super::AnalysisExecutionContext {
+        super::AnalysisExecutionContext {
+            provider_name: provider_name.to_string(),
+            model_name: model_name.to_string(),
+            endpoint: format!("test://{provider_name}"),
+        }
+    }
+
     fn error_count(service: &WorkspaceService, error_id: &str) -> i64 {
         let mut conn = service.get_db_connection().expect("connection");
         block_on_db(async {
@@ -1294,16 +1481,12 @@ mod tests {
     }
 
     #[test]
-    fn siliconflow_plain_caption_is_wrapped_and_records_provider_response() {
+    fn invalid_model_format_is_retried_with_repair_prompt() {
         let (service, root) = test_workspace();
         let page_id = seed_page(&service, true);
-        let provider = PlainCaptionProvider;
+        let provider = FormatRetryProvider::new();
         let layout = service.current_layout().expect("layout");
-        let context = super::AnalysisExecutionContext {
-            provider_name: "siliconflow".to_string(),
-            model_name: "zai-org/GLM-4.6V".to_string(),
-            endpoint: "test://siliconflow".to_string(),
-        };
+        let context = analysis_context("siliconflow", "zai-org/GLM-4.6V");
 
         let result = AnalysisService::analyze_page_core(
             &service,
@@ -1314,29 +1497,89 @@ mod tests {
             true,
             Some(&provider),
         )
-        .expect("siliconflow caption analysis");
+        .expect("retried analysis");
 
         assert_eq!(result.status, "succeeded");
         let result_json = result.result_json.expect("result json");
-        let parsed: serde_json::Value =
-            serde_json::from_str(&result_json).expect("wrapped analysis json");
+        let parsed: serde_json::Value = serde_json::from_str(&result_json).expect("analysis json");
         assert_eq!(parsed["schema_version"], PAGE_ANALYSIS_SCHEMA_VERSION);
         assert_eq!(parsed["page_id"], page_id);
-        assert_eq!(
-            parsed["analysis"]["visible_text"],
-            "This image shows a Chinese document page with a title and paragraphs."
-        );
+        assert_eq!(parsed["analysis"]["summary"], "修正后的中文摘要");
         assert_eq!(parsed["provider_response"]["endpoint_kind"], "siliconflow");
         let raw_response = parsed["provider_response"]["raw_json"]
             .as_str()
             .expect("raw provider json");
-        assert!(raw_response.contains("019bda85c39aba6a5fccce598dac8587"));
-        assert!(raw_response.contains("This image shows a Chinese document page"));
+        assert!(raw_response.contains("retried"));
         assert!(!raw_response.contains("data:image/png;base64"));
+        assert_eq!(
+            provider
+                .call_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+        assert!(provider
+            .last_prompt
+            .lock()
+            .expect("prompt")
+            .as_deref()
+            .unwrap_or_default()
+            .contains("上一次输出未通过"));
 
         let mut conn = service.get_db_connection().expect("connection");
         let page = DocumentRepository::find_page_by_id(&mut conn, &page_id)
             .expect("page lookup")
+            .expect("page");
+        assert_eq!(page.status, "analyzed");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn non_json_after_repair_retry_is_saved_as_text_fallback() {
+        let (service, root) = test_workspace();
+        let page_id = seed_page(&service, true);
+        let provider = AlwaysPlainTextProvider::new();
+        let layout = service.current_layout().expect("layout");
+        let context = analysis_context("mimo", "mimo-v2.5");
+
+        let result = AnalysisService::analyze_page_core(
+            &service,
+            &layout,
+            &context,
+            &page_id,
+            true,
+            true,
+            Some(&provider),
+        )
+        .expect("fallback analysis");
+
+        assert_eq!(result.status, "succeeded");
+        let result_json = result.result_json.expect("result json");
+        let parsed: serde_json::Value = serde_json::from_str(&result_json).expect("analysis json");
+        assert_eq!(parsed["schema_version"], PAGE_ANALYSIS_SCHEMA_VERSION);
+        assert_eq!(parsed["page_id"], page_id);
+        assert_eq!(parsed["analysis"]["title"], "第 1 页分析");
+        assert_eq!(parsed["analysis"]["topics"][0], "页面分析");
+        assert!(parsed["analysis"]["visible_text"]
+            .as_str()
+            .expect("visible text")
+            .contains("第二次仍然只返回自然语言描述"));
+        assert!(parsed["retrieval"]["bm25_text"]
+            .as_str()
+            .expect("bm25")
+            .contains("第二次仍然只返回自然语言描述"));
+        assert_eq!(parsed["model"]["provider"], "mimo");
+        assert_eq!(parsed["provider_response"]["endpoint_kind"], "mimo");
+        assert_eq!(
+            provider
+                .call_count
+                .load(std::sync::atomic::Ordering::SeqCst),
+            2
+        );
+
+        let mut conn = service.get_db_connection().expect("connection");
+        let page = DocumentRepository::find_page_by_id(&mut conn, &page_id)
+            .expect("lookup")
             .expect("page");
         assert_eq!(page.status, "analyzed");
 
@@ -1811,12 +2054,65 @@ mod tests {
         }
     }
 
-    struct PlainCaptionProvider;
+    struct FormatRetryProvider {
+        call_count: std::sync::atomic::AtomicUsize,
+        last_prompt: std::sync::Mutex<Option<String>>,
+    }
 
-    impl ModelProvider for PlainCaptionProvider {
+    impl FormatRetryProvider {
+        fn new() -> Self {
+            Self {
+                call_count: std::sync::atomic::AtomicUsize::new(0),
+                last_prompt: std::sync::Mutex::new(None),
+            }
+        }
+    }
+
+    impl ModelProvider for FormatRetryProvider {
         fn analyze_page(&self, request: &ModelAnalysisRequest) -> AppResult<ModelAnalysisResponse> {
+            let call = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            *self.last_prompt.lock().expect("prompt lock") = Some(request.prompt.clone());
+            if call == 1 {
+                return Ok(ModelAnalysisResponse {
+                    raw_json: "这里只是一段纯文本，不是 JSON。".to_string(),
+                    provider: request.provider.clone(),
+                    model_name: request.model_name.clone(),
+                    provider_response_json: Some("{\"first\":true}".to_string()),
+                });
+            }
+
+            let expected = &request.expected_page;
+            let raw_json = serde_json::json!({
+                "schema_version": PAGE_ANALYSIS_SCHEMA_VERSION,
+                "page_id": expected.page_id,
+                "image_hash": expected.image_hash,
+                "image_path": expected.image_path,
+                "source": {
+                    "document_id": expected.document_id,
+                    "page_number": expected.page_number,
+                    "original_filename": null
+                },
+                "analysis": {
+                    "title": "修正后的标题",
+                    "summary": "修正后的中文摘要",
+                    "visible_text": "修正后的可见文字",
+                    "topics": ["修正"],
+                    "keywords": ["JSON"]
+                },
+                "retrieval": {
+                    "bm25_text": "修正后的可检索文本"
+                },
+                "model": {
+                    "provider": request.provider,
+                    "model_name": request.model_name
+                }
+            })
+            .to_string();
             let provider_response_json = serde_json::json!({
-                "id": "019bda85c39aba6a5fccce598dac8587",
+                "id": "retried",
                 "object": "chat.completion",
                 "created": 1768897758_i64,
                 "model": request.model_name,
@@ -1825,8 +2121,7 @@ mod tests {
                         "index": 0,
                         "message": {
                             "role": "assistant",
-                            "content": "This image shows a Chinese document page with a title and paragraphs.",
-                            "reasoning_content": "The image visibly contains a document layout."
+                            "content": raw_json
                         },
                         "finish_reason": "stop"
                     }
@@ -1841,8 +2136,51 @@ mod tests {
             .to_string();
 
             Ok(ModelAnalysisResponse {
-                raw_json: "This image shows a Chinese document page with a title and paragraphs."
-                    .to_string(),
+                raw_json,
+                provider: request.provider.clone(),
+                model_name: request.model_name.clone(),
+                provider_response_json: Some(provider_response_json),
+            })
+        }
+    }
+
+    struct AlwaysPlainTextProvider {
+        call_count: std::sync::atomic::AtomicUsize,
+    }
+
+    impl AlwaysPlainTextProvider {
+        fn new() -> Self {
+            Self {
+                call_count: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+
+    impl ModelProvider for AlwaysPlainTextProvider {
+        fn analyze_page(&self, request: &ModelAnalysisRequest) -> AppResult<ModelAnalysisResponse> {
+            let call = self
+                .call_count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+                + 1;
+            let raw_json = if call == 1 {
+                "第一次返回自然语言描述，没有 JSON。"
+            } else {
+                "第二次仍然只返回自然语言描述，用于验证兜底分析。"
+            };
+            let provider_response_json = serde_json::json!({
+                "id": format!("plain-{call}"),
+                "choices": [
+                    {
+                        "message": {
+                            "content": raw_json
+                        }
+                    }
+                ]
+            })
+            .to_string();
+
+            Ok(ModelAnalysisResponse {
+                raw_json: raw_json.to_string(),
                 provider: request.provider.clone(),
                 model_name: request.model_name.clone(),
                 provider_response_json: Some(provider_response_json),

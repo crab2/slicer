@@ -5,6 +5,7 @@ import type {
   AnalysisBatchResultDto,
   AnalysisResultDto,
   ApiServerStatusDto,
+  ApiKeyListDto,
   AppErrorDto,
   AppSettingsDto,
   ModelConfigurationStatusDto,
@@ -93,7 +94,18 @@ export const tauriClient = {
     open({ directory: true, multiple: false }),
   openExternalUrl: (url: string) => openUrl(url),
   saveApiKey: (key: string) => callTauriCommand<void>("save_api_key", { key }),
+  saveProviderApiKey: (provider: string, key: string) =>
+    callTauriCommand<void>("save_provider_api_key", { provider, key }),
+  listApiKeys: () => callTauriCommand<ApiKeyListDto>("list_api_keys"),
+  addApiKey: (provider: string, label: string, key: string, activate = true) =>
+    callTauriCommand<ApiKeyListDto>("add_api_key", { provider, label, key, activate }),
+  activateApiKey: (provider: string, keyId: string) =>
+    callTauriCommand<ApiKeyListDto>("activate_api_key", { provider, keyId }),
+  deleteApiKeyRecord: (provider: string, keyId: string) =>
+    callTauriCommand<ApiKeyListDto>("delete_api_key_record", { provider, keyId }),
   deleteApiKey: () => callTauriCommand<void>("delete_api_key"),
+  deleteProviderApiKey: (provider: string) =>
+    callTauriCommand<void>("delete_provider_api_key", { provider }),
   getModelConfigurationStatus: () =>
     callTauriCommand<ModelConfigurationStatusDto>("get_model_configuration_status"),
   getPrivacyNoticeStatus: () =>

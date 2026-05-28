@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import { EmptyState } from "../components/common/EmptyState";
 import { ErrorMessage } from "../components/common/ErrorMessage";
 import { StatusBadge } from "../components/common/StatusBadge";
@@ -53,37 +53,6 @@ export function AppShell() {
   useEffect(() => {
     void refreshWorkspaceStatus();
   }, []);
-
-  const currentView = useMemo(() => {
-    switch (activeView) {
-      case "search":
-        return (
-          <SearchPage
-            workspaceReady={workspaceStatus.status === "ready"}
-            isActive={activeView === "search"}
-          />
-        );
-      case "settings":
-        return (
-          <SettingsPage
-            workspaceStatus={workspaceStatus}
-            isWorkspaceLoading={isWorkspaceLoading}
-            onChooseWorkspace={handleChooseWorkspace}
-          />
-        );
-      case "workbench":
-      default:
-        return (
-          <WorkbenchPage
-            workspaceStatus={workspaceStatus}
-            isWorkspaceLoading={isWorkspaceLoading}
-            isActive={activeView === "workbench"}
-            onChooseWorkspace={handleChooseWorkspace}
-            onOpenSettings={() => setActiveView("settings")}
-          />
-        );
-    }
-  }, [activeView, isWorkspaceLoading, workspaceStatus, activeView]);
 
   const workspaceReady = workspaceStatus.status === "ready";
   const workspaceIssue = workspaceStatus.error?.message;
@@ -140,7 +109,32 @@ export function AppShell() {
           <ErrorMessage message={workspaceIssue} title="工作区状态" />
         ) : null}
 
-        <section className="content-area">{currentView}</section>
+        <section className="content-area">
+          <div hidden={activeView !== "workbench"}>
+            <WorkbenchPage
+              workspaceStatus={workspaceStatus}
+              isWorkspaceLoading={isWorkspaceLoading}
+              isActive={activeView === "workbench"}
+              onChooseWorkspace={handleChooseWorkspace}
+              onOpenSettings={() => setActiveView("settings")}
+            />
+          </div>
+
+          {activeView === "search" ? (
+            <SearchPage
+              workspaceReady={workspaceStatus.status === "ready"}
+              isActive={activeView === "search"}
+            />
+          ) : null}
+
+          {activeView === "settings" ? (
+            <SettingsPage
+              workspaceStatus={workspaceStatus}
+              isWorkspaceLoading={isWorkspaceLoading}
+              onChooseWorkspace={handleChooseWorkspace}
+            />
+          ) : null}
+        </section>
 
         <EmptyState
           title="加载中状态预留"

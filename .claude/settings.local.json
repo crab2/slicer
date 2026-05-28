@@ -22,7 +22,9 @@
       "WebFetch(domain:docs.siliconflow.cn)",
       "Bash(Test-Path *)",
       "Bash(git -C \"D:/AIProject/slicer\" log --oneline --all)",
-      "Bash(git *)"
+      "Bash(git *)",
+      "PowerShell(node -v)",
+      "PowerShell(py *)"
     ]
   }
 }

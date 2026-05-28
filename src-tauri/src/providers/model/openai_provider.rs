@@ -3,7 +3,7 @@ use crate::errors::{AppError, AppResult};
 use crate::providers::model::provider::{
     ModelAnalysisRequest, ModelAnalysisResponse, ModelProvider,
 };
-use crate::security;
+use crate::services::settings_service::SettingsService;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::io::Read;
@@ -14,6 +14,7 @@ pub struct OpenAIProvider;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PROVIDER_RESPONSE_BYTES: u64 = 1_000_000;
+const MAX_COMPLETION_TOKENS: u16 = 1200;
 
 impl OpenAIProvider {
     pub fn request_endpoint(settings: &AppSettingsDto) -> AppResult<String> {
@@ -29,7 +30,7 @@ impl OpenAIProvider {
         }
 
         if custom_endpoint.is_empty() {
-            validate_endpoint(&format!("{base_url}/v1/chat/completions"))
+            validate_endpoint(&default_chat_completions_endpoint(base_url))
         } else {
             validate_endpoint(&format!(
                 "{base_url}/{}",
@@ -37,23 +38,9 @@ impl OpenAIProvider {
             ))
         }
     }
-}
 
-impl ModelProvider for OpenAIProvider {
-    fn analyze_page(&self, request: &ModelAnalysisRequest) -> AppResult<ModelAnalysisResponse> {
-        let api_key = security::read_api_key()?.ok_or_else(|| {
-            AppError::new(
-                "api_key_missing",
-                "API key 未配置，无法调用 OpenAI 模型。",
-                "analysis_provider",
-                true,
-            )
-        })?;
-
-        let image_base64 = base64::engine::general_purpose::STANDARD.encode(&request.image_bytes);
-        let image_url = format!("data:{};base64,{}", request.image_mime_type, image_base64);
-
-        let body = json!({
+    fn request_body(request: &ModelAnalysisRequest, image_url: &str) -> Value {
+        json!({
             "model": request.model_name,
             "messages": [
                 {
@@ -72,8 +59,30 @@ impl ModelProvider for OpenAIProvider {
                     ]
                 }
             ],
-            "max_tokens": 4096
-        });
+            "max_tokens": MAX_COMPLETION_TOKENS,
+            "response_format": {
+                "type": "json_object"
+            }
+        })
+    }
+}
+
+impl ModelProvider for OpenAIProvider {
+    fn analyze_page(&self, request: &ModelAnalysisRequest) -> AppResult<ModelAnalysisResponse> {
+        let api_key =
+            SettingsService::read_active_api_key_for_provider("openai")?.ok_or_else(|| {
+                AppError::new(
+                    "api_key_missing",
+                    "API key 未配置，无法调用 OpenAI 模型。",
+                    "analysis_provider",
+                    true,
+                )
+            })?;
+
+        let image_base64 = base64::engine::general_purpose::STANDARD.encode(&request.image_bytes);
+        let image_url = format!("data:{};base64,{}", request.image_mime_type, image_base64);
+
+        let body = Self::request_body(request, &image_url);
 
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
@@ -127,7 +136,7 @@ impl ModelProvider for OpenAIProvider {
 
         Ok(ModelAnalysisResponse {
             raw_json: extract_openai_content(&response_text)?,
-            provider: request.provider.clone(),
+            provider: "openai".to_string(),
             model_name: request.model_name.clone(),
             provider_response_json: Some(response_text),
         })
@@ -162,6 +171,17 @@ fn validate_endpoint(endpoint: &str) -> AppResult<String> {
             true,
         )
         .with_details("endpoint_kind=openai")),
+    }
+}
+
+fn default_chat_completions_endpoint(base_url: &str) -> String {
+    let lower = base_url.to_ascii_lowercase();
+    if lower.ends_with("/chat/completions") {
+        base_url.to_string()
+    } else if lower.ends_with("/v1") {
+        format!("{base_url}/chat/completions")
+    } else {
+        format!("{base_url}/v1/chat/completions")
     }
 }
 
@@ -257,8 +277,20 @@ fn provider_error(code: &str, retryable: bool, summary: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_openai_content, OpenAIProvider};
+    use super::{extract_openai_content, OpenAIProvider, MAX_COMPLETION_TOKENS};
     use crate::domain::settings::AppSettingsDto;
+    use crate::providers::model::provider::ModelAnalysisRequest;
+    use crate::providers::model::schema_validator::ExpectedPageContext;
+
+    fn expected_page() -> ExpectedPageContext {
+        ExpectedPageContext {
+            page_id: "doc-1_1".to_string(),
+            document_id: "doc-1".to_string(),
+            page_number: 1,
+            image_hash: "hash-1".to_string(),
+            image_path: "pages/doc-1/hash-1.png".to_string(),
+        }
+    }
 
     #[test]
     fn uses_official_openai_endpoint_when_base_url_empty() {
@@ -277,6 +309,29 @@ mod tests {
             OpenAIProvider::request_endpoint(&settings).expect("endpoint"),
             "https://custom.openai.azure.com/v1/chat/completions"
         );
+    }
+
+    #[test]
+    fn openai_request_body_uses_standard_chat_completions_shape() {
+        let request = ModelAnalysisRequest {
+            image_bytes: Vec::new(),
+            image_mime_type: "image/png".to_string(),
+            prompt: "分析页面".to_string(),
+            model_name: "Custom-Vision-Model".to_string(),
+            provider: "openai".to_string(),
+            endpoint: "https://models.example.com/v1/chat/completions".to_string(),
+            expected_page: expected_page(),
+        };
+
+        let body = OpenAIProvider::request_body(&request, "data:image/png;base64,abc");
+
+        assert_eq!(body["model"], "Custom-Vision-Model");
+        assert_eq!(body["max_tokens"], MAX_COMPLETION_TOKENS);
+        assert!(body.get("max_completion_tokens").is_none());
+        assert!(body.get("thinking").is_none());
+        assert_eq!(body["response_format"]["type"], "json_object");
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][0]["content"][1]["type"], "image_url");
     }
 
     #[test]

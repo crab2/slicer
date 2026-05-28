@@ -18,7 +18,7 @@ pub struct WorkspaceSettingsRecord {
 impl Default for WorkspaceSettingsRecord {
     fn default() -> Self {
         Self {
-            model_provider: "custom".to_string(),
+            model_provider: "siliconflow".to_string(),
             base_url: String::new(),
             custom_endpoint: String::new(),
             model_name: String::new(),
@@ -53,6 +53,21 @@ pub struct ApiServerStatusDto {
     pub port: u16,
     pub enabled: bool,
     pub last_error: Option<crate::errors::AppError>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ApiKeyRecordDto {
+    pub key_id: String,
+    pub provider: String,
+    pub label: String,
+    pub is_active: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ApiKeyListDto {
+    pub keys: Vec<ApiKeyRecordDto>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

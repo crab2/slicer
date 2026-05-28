@@ -27,8 +27,10 @@ use commands::search_commands::{
     get_index_status, get_page_image_preview, search_pages, start_index_rebuild,
 };
 use commands::settings_commands::{
-    accept_privacy_notice, delete_api_key, find_libreoffice_path, get_app_settings,
-    get_model_configuration_status, get_privacy_notice_status, save_api_key, save_app_settings,
+    accept_privacy_notice, activate_api_key, add_api_key, delete_api_key, delete_api_key_record,
+    delete_provider_api_key, find_libreoffice_path, get_app_settings,
+    get_model_configuration_status, get_privacy_notice_status, list_api_keys, save_api_key,
+    save_app_settings, save_provider_api_key,
 };
 use commands::workspace_commands::{get_workspace_status, select_workspace};
 use services::api_server_service::ApiServerService;
@@ -85,7 +87,13 @@ pub fn run() {
             save_app_settings,
             find_libreoffice_path,
             save_api_key,
+            save_provider_api_key,
+            list_api_keys,
+            add_api_key,
+            activate_api_key,
+            delete_api_key_record,
             delete_api_key,
+            delete_provider_api_key,
             get_model_configuration_status,
             get_privacy_notice_status,
             accept_privacy_notice,

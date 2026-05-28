@@ -4,6 +4,8 @@ import { ErrorMessage } from "../../components/common/ErrorMessage";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { tauriClient } from "../../lib/tauriClient";
 import type {
+  ApiKeyListDto,
+  ApiKeyRecordDto,
   ApiServerStatusDto,
   AppSettingsDto,
   WorkspaceStatusDto,
@@ -36,15 +38,19 @@ export function SettingsPage({
 
   // API key state
   const [apiKeyInput, setApiKeyInput] = useState("");
+  const [apiKeyLabelInput, setApiKeyLabelInput] = useState("");
+  const [apiKeyList, setApiKeyList] = useState<ApiKeyListDto>({ keys: [] });
   const [isSavingKey, setIsSavingKey] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
     setIsLoading(true);
-    tauriClient
-      .getAppSettings()
-      .then((s) => {
-        if (!cancelled) setSettings(s);
+    Promise.all([tauriClient.getAppSettings(), tauriClient.listApiKeys()])
+      .then(([s, keys]) => {
+        if (!cancelled) {
+          setSettings(s);
+          setApiKeyList(keys);
+        }
       })
       .catch((e) => {
         if (!cancelled) setError(extractError(e));
@@ -118,9 +124,15 @@ export function SettingsPage({
     setIsSavingKey(true);
     setError(null);
     try {
-      await tauriClient.saveApiKey(apiKeyInput.trim());
+      const updatedKeys = await tauriClient.addApiKey(
+        settings?.model_provider ?? "siliconflow",
+        apiKeyLabelInput.trim(),
+        apiKeyInput.trim(),
+        true,
+      );
+      setApiKeyList(updatedKeys);
       setApiKeyInput("");
-      // Refresh settings to update api_key_configured
+      setApiKeyLabelInput("");
       const updated = await tauriClient.getAppSettings();
       setSettings(updated);
     } catch (e) {
@@ -130,11 +142,27 @@ export function SettingsPage({
     }
   }
 
-  async function handleDeleteApiKey() {
+  async function handleActivateApiKey(record: ApiKeyRecordDto) {
     setIsSavingKey(true);
     setError(null);
     try {
-      await tauriClient.deleteApiKey();
+      const updatedKeys = await tauriClient.activateApiKey(record.provider, record.key_id);
+      setApiKeyList(updatedKeys);
+      const updated = await tauriClient.getAppSettings();
+      setSettings(updated);
+    } catch (e) {
+      setError(extractError(e));
+    } finally {
+      setIsSavingKey(false);
+    }
+  }
+
+  async function handleDeleteApiKey(record: ApiKeyRecordDto) {
+    setIsSavingKey(true);
+    setError(null);
+    try {
+      const updatedKeys = await tauriClient.deleteApiKeyRecord(record.provider, record.key_id);
+      setApiKeyList(updatedKeys);
       const updated = await tauriClient.getAppSettings();
       setSettings(updated);
     } catch (e) {
@@ -222,6 +250,12 @@ export function SettingsPage({
     );
   }
 
+  const currentProvider = settings.model_provider;
+  const currentProviderKeys = apiKeyList.keys.filter(
+    (item) => item.provider === currentProvider,
+  );
+  const currentProviderHasActiveKey = currentProviderKeys.some((item) => item.is_active);
+
   return (
     <div className="settings-list">
       {error ? (
@@ -298,11 +332,9 @@ export function SettingsPage({
                 onChange={(e) => updateField("model_provider", e.target.value)}
               >
                 <option value="siliconflow">硅基流动 SiliconFlow</option>
+                <option value="mimo">MiMo</option>
                 <option value="openai">OpenAI</option>
                 <option value="anthropic">Anthropic</option>
-                <option value="custom">custom（自定义 HTTP）</option>
-                <option value="openai_compatible">openai_compatible</option>
-                <option value="local_mock">local_mock（本地测试，无需 API key）</option>
               </select>
             </label>
             <label>
@@ -329,15 +361,15 @@ export function SettingsPage({
               <span>Model Name</span>
               <input
                 type="text"
-                placeholder="gpt-4o"
+                placeholder="zai-org/GLM-4.6V"
                 value={settings.model_name}
                 onChange={(e) => updateField("model_name", e.target.value)}
               />
             </label>
           </div>
         </div>
-        <StatusBadge tone={settings.api_key_configured ? "success" : "warning"}>
-          {settings.api_key_configured ? "密钥已配置" : "密钥未配置"}
+        <StatusBadge tone={currentProviderHasActiveKey ? "success" : "warning"}>
+          {currentProviderHasActiveKey ? "密钥已配置" : "密钥未配置"}
         </StatusBadge>
       </section>
 
@@ -350,8 +382,14 @@ export function SettingsPage({
           </p>
           <div className="setting-field api-key-field">
             <input
+              type="text"
+              placeholder="名称，例如 硅基流动主 Key"
+              value={apiKeyLabelInput}
+              onChange={(e) => setApiKeyLabelInput(e.target.value)}
+            />
+            <input
               type="password"
-              placeholder={settings.api_key_configured ? "输入新密钥以替换" : "输入 API 密钥"}
+              placeholder="输入 API 密钥"
               value={apiKeyInput}
               onChange={(e) => setApiKeyInput(e.target.value)}
             />
@@ -359,17 +397,42 @@ export function SettingsPage({
               onClick={handleSaveApiKey}
               disabled={isSavingKey || !apiKeyInput.trim()}
             >
-              {isSavingKey ? "保存中" : "保存密钥"}
+              {isSavingKey ? "保存中" : "新增并启用"}
             </Button>
-            {settings.api_key_configured ? (
-              <Button onClick={handleDeleteApiKey} disabled={isSavingKey}>
-                删除密钥
-              </Button>
-            ) : null}
+          </div>
+          <div className="api-key-list">
+            {currentProviderKeys.length === 0 ? (
+              <p className="muted-copy api-key-empty">当前 Provider 尚未保存 API Key。</p>
+            ) : (
+              currentProviderKeys.map((record) => (
+                <div className="api-key-item" key={record.key_id}>
+                  <div>
+                    <strong>{record.label}</strong>
+                    <span>{record.is_active ? "已启用" : "备用"}</span>
+                  </div>
+                  <div className="api-key-actions">
+                    {!record.is_active ? (
+                      <Button
+                        onClick={() => void handleActivateApiKey(record)}
+                        disabled={isSavingKey}
+                      >
+                        启用
+                      </Button>
+                    ) : null}
+                    <Button
+                      onClick={() => void handleDeleteApiKey(record)}
+                      disabled={isSavingKey}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </div>
+              ))
+            )}
           </div>
         </div>
-        <StatusBadge tone={settings.api_key_configured ? "success" : "neutral"}>
-          {settings.api_key_configured ? "已配置" : "未配置"}
+        <StatusBadge tone={currentProviderHasActiveKey ? "success" : "neutral"}>
+          {currentProviderHasActiveKey ? "已配置" : "未配置"}
         </StatusBadge>
       </section>
 

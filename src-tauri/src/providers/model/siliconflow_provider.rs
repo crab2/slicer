@@ -3,7 +3,7 @@ use crate::errors::{AppError, AppResult};
 use crate::providers::model::provider::{
     ModelAnalysisRequest, ModelAnalysisResponse, ModelProvider,
 };
-use crate::security;
+use crate::services::settings_service::SettingsService;
 use base64::Engine;
 use serde_json::{json, Value};
 use std::io::Read;
@@ -14,8 +14,7 @@ pub struct SiliconFlowProvider;
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(90);
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_PROVIDER_RESPONSE_BYTES: u64 = 1_000_000;
-const SILICONFLOW_TEMPERATURE: f64 = 0.7;
-const SILICONFLOW_MAX_TOKENS: u16 = 1000;
+const MAX_COMPLETION_TOKENS: u16 = 1200;
 
 impl SiliconFlowProvider {
     pub fn request_endpoint(settings: &AppSettingsDto) -> AppResult<String> {
@@ -40,9 +39,9 @@ impl SiliconFlowProvider {
         }
     }
 
-    fn request_body(model_name: &str, prompt: &str, image_url: &str) -> Value {
+    fn request_body(request: &ModelAnalysisRequest, image_url: &str) -> Value {
         json!({
-            "model": model_name,
+            "model": request.model_name,
             "messages": [
                 {
                     "role": "user",
@@ -55,32 +54,35 @@ impl SiliconFlowProvider {
                         },
                         {
                             "type": "text",
-                            "text": prompt
+                            "text": request.prompt
                         }
                     ]
                 }
             ],
-            "temperature": SILICONFLOW_TEMPERATURE,
-            "max_tokens": SILICONFLOW_MAX_TOKENS
+            "max_completion_tokens": MAX_COMPLETION_TOKENS,
+            "response_format": {
+                "type": "json_object"
+            }
         })
     }
 }
 
 impl ModelProvider for SiliconFlowProvider {
     fn analyze_page(&self, request: &ModelAnalysisRequest) -> AppResult<ModelAnalysisResponse> {
-        let api_key = security::read_api_key()?.ok_or_else(|| {
-            AppError::new(
-                "api_key_missing",
-                "API key 未配置，无法调用硅基流动模型。",
-                "analysis_provider",
-                true,
-            )
-        })?;
+        let api_key = SettingsService::read_active_api_key_for_provider("siliconflow")?
+            .ok_or_else(|| {
+                AppError::new(
+                    "api_key_missing",
+                    "API key 未配置，无法调用硅基流动模型。",
+                    "analysis_provider",
+                    true,
+                )
+            })?;
 
         let image_base64 = base64::engine::general_purpose::STANDARD.encode(&request.image_bytes);
         let image_url = format!("data:{};base64,{}", request.image_mime_type, image_base64);
 
-        let body = Self::request_body(&request.model_name, &request.prompt, &image_url);
+        let body = Self::request_body(request, &image_url);
 
         let client = reqwest::blocking::Client::builder()
             .connect_timeout(CONNECT_TIMEOUT)
@@ -275,8 +277,20 @@ fn provider_error(code: &str, retryable: bool, summary: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_siliconflow_content, SiliconFlowProvider};
+    use super::{extract_siliconflow_content, SiliconFlowProvider, MAX_COMPLETION_TOKENS};
     use crate::domain::settings::AppSettingsDto;
+    use crate::providers::model::provider::ModelAnalysisRequest;
+    use crate::providers::model::schema_validator::ExpectedPageContext;
+
+    fn expected_page() -> ExpectedPageContext {
+        ExpectedPageContext {
+            page_id: "doc-1_1".to_string(),
+            document_id: "doc-1".to_string(),
+            page_number: 1,
+            image_hash: "hash-1".to_string(),
+            image_path: "pages/doc-1/hash-1.png".to_string(),
+        }
+    }
 
     #[test]
     fn uses_official_siliconflow_endpoint_when_base_url_empty() {
@@ -335,14 +349,19 @@ mod tests {
     }
 
     #[test]
-    fn siliconflow_request_body_matches_reference_chat_completions_vision_shape() {
-        let body = SiliconFlowProvider::request_body(
-            "zai-org/GLM-4.6V",
-            "analyze this page",
-            "data:image/png;base64,abc",
-        );
+    fn siliconflow_request_body_matches_mimo_compatible_vision_shape() {
+        let request = ModelAnalysisRequest {
+            image_bytes: Vec::new(),
+            image_mime_type: "image/png".to_string(),
+            prompt: "analyze this page".to_string(),
+            model_name: "Pro/moonshotai/Kimi-K2.6".to_string(),
+            provider: "siliconflow".to_string(),
+            endpoint: "https://api.siliconflow.cn/v1/chat/completions".to_string(),
+            expected_page: expected_page(),
+        };
+        let body = SiliconFlowProvider::request_body(&request, "data:image/png;base64,abc");
 
-        assert_eq!(body["model"], "zai-org/GLM-4.6V");
+        assert_eq!(body["model"], "Pro/moonshotai/Kimi-K2.6");
         assert_eq!(body["messages"][0]["role"], "user");
         assert_eq!(body["messages"].as_array().expect("messages").len(), 1);
         assert_eq!(body["messages"][0]["content"][0]["type"], "image_url");
@@ -355,8 +374,9 @@ mod tests {
             body["messages"][0]["content"][1]["text"],
             "analyze this page"
         );
-        assert_eq!(body["temperature"], 0.7);
-        assert_eq!(body["max_tokens"], 1000);
-        assert!(body.get("response_format").is_none());
+        assert!(body.get("temperature").is_none());
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], MAX_COMPLETION_TOKENS);
+        assert_eq!(body["response_format"]["type"], "json_object");
     }
 }

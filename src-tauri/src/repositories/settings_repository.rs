@@ -1,4 +1,4 @@
-use crate::domain::settings::AppSettingsDto;
+use crate::domain::settings::{ApiKeyListDto, ApiKeyRecordDto, AppSettingsDto};
 use crate::errors::{AppError, AppResult};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
@@ -87,12 +87,47 @@ impl SettingsRepository {
         )
     }
 
+    pub fn load_api_key_list(&self) -> AppResult<ApiKeyListDto> {
+        let path = self.api_keys_path();
+        if !path.exists() {
+            return Ok(ApiKeyListDto { keys: Vec::new() });
+        }
+        let text = fs::read_to_string(&path).map_err(|err| {
+            AppError::io("settings", "api_keys_read_failed", err)
+                .with_details(path.display().to_string())
+        })?;
+        serde_json::from_str(&text).map_err(|err| {
+            AppError::new(
+                "api_keys_parse_failed",
+                "API key list could not be read.",
+                "settings",
+                true,
+            )
+            .with_details(err.to_string())
+        })
+    }
+
+    pub fn save_api_key_list(&self, keys: &[ApiKeyRecordDto]) -> AppResult<()> {
+        fs::create_dir_all(&self.config_dir)
+            .map_err(|err| AppError::io("settings", "settings_dir_failed", err))?;
+        self.write_json(
+            self.api_keys_path(),
+            &ApiKeyListDto {
+                keys: keys.to_vec(),
+            },
+        )
+    }
+
     fn bootstrap_path(&self) -> PathBuf {
         self.config_dir.join("bootstrap-workspace.json")
     }
 
     fn app_settings_path(&self) -> PathBuf {
         self.config_dir.join("app-settings.json")
+    }
+
+    fn api_keys_path(&self) -> PathBuf {
+        self.config_dir.join("api-keys.json")
     }
 
     fn write_json<T: Serialize>(&self, path: PathBuf, value: &T) -> AppResult<()> {

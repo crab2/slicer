@@ -1,5 +1,5 @@
 # generated: 2026-05-18T13:43:32.8181438+08:00
-# last_updated: 2026-05-20T12:00:00+08:00
+# last_updated: 2026-05-27T00:00:00+08:00
 # project: slicer
 # project_key: NOKEY
 # tracking_system: file-system
@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-18T13:43:32.8181438+08:00
-last_updated: 2026-05-20T16:00:00+08:00
+last_updated: 2026-05-27T00:00:00+08:00
 project: slicer
 project_key: NOKEY
 tracking_system: file-system
@@ -88,4 +88,4 @@ development_status:
   5-4-get-search-get-pages-page_id-与-get-documents-document_id-读取接口: done
   5-5-post-indexes-rebuild-token-保护与后台重建任务: done
   5-6-api-合同测试-settings-可见性与外部访问收口: done
-  epic-5-retrospective: optional
+  epic-5-retrospective: done

@@ -26,6 +26,7 @@ export function SearchPage({ workspaceReady, isActive }: SearchPageProps) {
   const [previewSrc, setPreviewSrc] = useState<string | null>(null);
   const [isPreviewLoading, setIsPreviewLoading] = useState(false);
   const [previewError, setPreviewError] = useState<string | null>(null);
+  const [isLargePreviewOpen, setIsLargePreviewOpen] = useState(false);
   const [isSearching, setIsSearching] = useState(false);
   const [isRebuilding, setIsRebuilding] = useState(false);
   const [searchError, setSearchError] = useState<{
@@ -111,6 +112,25 @@ export function SearchPage({ workspaceReady, isActive }: SearchPageProps) {
     };
   }, [selected]);
 
+  useEffect(() => {
+    setIsLargePreviewOpen(false);
+  }, [selected?.page_id]);
+
+  useEffect(() => {
+    if (!isLargePreviewOpen) {
+      return;
+    }
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setIsLargePreviewOpen(false);
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [isLargePreviewOpen]);
+
   async function handleSearch() {
     const trimmed = query.trim();
     if (!trimmed) {
@@ -158,166 +178,213 @@ export function SearchPage({ workspaceReady, isActive }: SearchPageProps) {
   const statusTone = indexStatusTone(indexStatus?.status);
   const statusLabel = indexStatusLabel(indexStatus, isStatusLoading);
   const noIndexablePages = (indexStatus?.analyzable_page_count ?? 0) === 0;
+  const selectedPreviewLabel = selected
+    ? selected.title?.trim() || `第 ${selected.page_number} 页`
+    : "";
 
   return (
-    <div className="page-grid search-layout">
-      <section className="panel panel-wide">
-        <div className="panel-header">
-          <div>
-            <p className="eyebrow">{t.queryEyebrow}</p>
-            <h2>{t.title}</h2>
-            <p className="muted-copy">{indexStatusHint(indexStatus)}</p>
+    <>
+      <div className="page-grid search-layout">
+        <section className="panel panel-wide">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">{t.queryEyebrow}</p>
+              <h2>{t.title}</h2>
+              <p className="muted-copy">{indexStatusHint(indexStatus)}</p>
+            </div>
+            <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
           </div>
-          <StatusBadge tone={statusTone}>{statusLabel}</StatusBadge>
-        </div>
-        {statusError ? <p className="job-error">{statusError}</p> : null}
-        {indexStatus?.error_summary ? (
-          <p className="job-error">{indexStatus.error_summary}</p>
-        ) : null}
-        {indexStatus?.stale_reason ? (
-          <p className="muted-copy">{indexStatus.stale_reason}</p>
-        ) : null}
-        {indexStatus?.search_uses_stale_index ? (
-          <p className="muted-copy">{t.staleIndex}</p>
-        ) : null}
-        <div className="search-bar" aria-label={t.searchAria}>
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") {
-                void handleSearch();
-              }
-            }}
-            placeholder={t.placeholder}
-            disabled={!workspaceReady || isSearching || !indexStatus?.can_search}
-          />
-          <Button
-            variant="primary"
-            onClick={() => void handleSearch()}
-            disabled={!workspaceReady || isSearching || !indexStatus?.can_search}
-          >
-            {isSearching ? t.searching : t.search}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void handleRebuildIndex()}
-            disabled={
-              !workspaceReady ||
-              isRebuilding ||
-              indexStatus?.status === "building" ||
-              indexStatus?.can_rebuild === false ||
-              noIndexablePages
-            }
-          >
-            {isRebuilding || indexStatus?.status === "building"
-              ? t.rebuilding
-              : indexStatus?.status === "not_built"
-                ? t.buildIndex
-                : t.rebuildIndex}
-          </Button>
-        </div>
-        {searchError ? (
-          <ErrorMessage
-            title={t.searchFailed}
-            message={searchError.message}
-            correlationId={searchError.correlationId}
-          />
-        ) : null}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h3>{t.results}</h3>
-          <StatusBadge>{results ? t.resultCount(results.items.length) : t.empty}</StatusBadge>
-        </div>
-        {!workspaceReady ? (
-          <EmptyState title={t.waitWorkspace} description={t.waitWorkspaceDesc} />
-        ) : !indexStatus?.can_search ? (
-          <EmptyState
-            title={t.indexUnavailable}
-            description={
-              noIndexablePages
-                ? t.noIndexableHint
-                : indexStatus?.status === "building"
-                  ? t.indexBuilding
-                  : t.buildIndexFirst
-            }
-          />
-        ) : results && submittedQuery && results.items.length === 0 ? (
-          <EmptyState
-            title={t.noMatches}
-            description={t.noMatchesDesc(submittedQuery)}
-          />
-        ) : results && results.items.length > 0 ? (
-          <ul className="search-results-list">
-            {results.items.map((item) => (
-              <li key={item.page_id}>
-                <button
-                  type="button"
-                  className={
-                    selected?.page_id === item.page_id
-                      ? "search-result-item selected"
-                      : "search-result-item"
-                  }
-                  onClick={() => setSelected(item)}
-                >
-                  <div className="search-result-title">
-                    {item.title?.trim() || `第 ${item.page_number} 页`}
-                  </div>
-                  <p className="muted-copy search-result-meta">
-                    {item.original_filename ?? t.unknownDoc} · 第 {item.page_number} 页 · 相关度{" "}
-                    {item.score.toFixed(2)}
-                  </p>
-                  {item.summary ? (
-                    <p className="search-result-snippet">{item.summary}</p>
-                  ) : null}
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <EmptyState title={t.noResultsYet} description={t.noResultsYetDesc} />
-        )}
-      </section>
-
-      <section className="panel">
-        <div className="panel-header compact">
-          <h3>{t.preview}</h3>
-          <StatusBadge tone={selected?.image_available ? "success" : "neutral"}>
-            {selected ? (selected.image_available ? t.available : t.missing) : t.selectOne}
-          </StatusBadge>
-        </div>
-        {selected?.image_available ? (
-          isPreviewLoading ? (
-            <p className="muted-copy">{t.previewLoading}</p>
-          ) : previewSrc ? (
-            <img
-              className="search-preview-image"
-              src={previewSrc}
-              alt={selected.title ?? `第 ${selected.page_number} 页`}
+          {statusError ? <p className="job-error">{statusError}</p> : null}
+          {indexStatus?.error_summary ? (
+            <p className="job-error">{indexStatus.error_summary}</p>
+          ) : null}
+          {indexStatus?.stale_reason ? (
+            <p className="muted-copy">{indexStatus.stale_reason}</p>
+          ) : null}
+          {indexStatus?.search_uses_stale_index ? (
+            <p className="muted-copy">{t.staleIndex}</p>
+          ) : null}
+          <div className="search-bar" aria-label={t.searchAria}>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  void handleSearch();
+                }
+              }}
+              placeholder={t.placeholder}
+              disabled={!workspaceReady || isSearching || !indexStatus?.can_search}
             />
-          ) : (
-            <p className="muted-copy">{previewError ?? t.imageMissing}</p>
-          )
-        ) : selected ? (
-          <p className="muted-copy">{t.imageMissing}</p>
-        ) : (
-          <p className="muted-copy">{t.selectForPreview}</p>
-        )}
-      </section>
+            <Button
+              variant="primary"
+              onClick={() => void handleSearch()}
+              disabled={!workspaceReady || isSearching || !indexStatus?.can_search}
+            >
+              {isSearching ? t.searching : t.search}
+            </Button>
+            <Button
+              variant="secondary"
+              onClick={() => void handleRebuildIndex()}
+              disabled={
+                !workspaceReady ||
+                isRebuilding ||
+                indexStatus?.status === "building" ||
+                indexStatus?.can_rebuild === false ||
+                noIndexablePages
+              }
+            >
+              {isRebuilding || indexStatus?.status === "building"
+                ? t.rebuilding
+                : indexStatus?.status === "not_built"
+                  ? t.buildIndex
+                  : t.rebuildIndex}
+            </Button>
+          </div>
+          {searchError ? (
+            <ErrorMessage
+              title={t.searchFailed}
+              message={searchError.message}
+              correlationId={searchError.correlationId}
+            />
+          ) : null}
+        </section>
 
-      <section className="panel">
-        <div className="panel-header compact">
-          <h3>{t.jsonView}</h3>
-          <StatusBadge>{selected ? "page_analysis_v1" : t.selectOne}</StatusBadge>
+        <section className="panel">
+          <div className="panel-header compact">
+            <h3>{t.results}</h3>
+            <StatusBadge>{results ? t.resultCount(results.items.length) : t.empty}</StatusBadge>
+          </div>
+          {!workspaceReady ? (
+            <EmptyState title={t.waitWorkspace} description={t.waitWorkspaceDesc} />
+          ) : !indexStatus?.can_search ? (
+            <EmptyState
+              title={t.indexUnavailable}
+              description={
+                noIndexablePages
+                  ? t.noIndexableHint
+                  : indexStatus?.status === "building"
+                    ? t.indexBuilding
+                    : t.buildIndexFirst
+              }
+            />
+          ) : results && submittedQuery && results.items.length === 0 ? (
+            <EmptyState
+              title={t.noMatches}
+              description={t.noMatchesDesc(submittedQuery)}
+            />
+          ) : results && results.items.length > 0 ? (
+            <ul className="search-results-list">
+              {results.items.map((item) => (
+                <li key={item.page_id}>
+                  <button
+                    type="button"
+                    className={
+                      selected?.page_id === item.page_id
+                        ? "search-result-item selected"
+                        : "search-result-item"
+                    }
+                    onClick={() => setSelected(item)}
+                  >
+                    <div className="search-result-title">
+                      {item.title?.trim() || `第 ${item.page_number} 页`}
+                    </div>
+                    <p className="muted-copy search-result-meta">
+                      {item.original_filename ?? t.unknownDoc} · 第 {item.page_number} 页 · 相关度{" "}
+                      {item.score.toFixed(2)}
+                    </p>
+                    {item.summary ? (
+                      <p className="search-result-snippet">{item.summary}</p>
+                    ) : null}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState title={t.noResultsYet} description={t.noResultsYetDesc} />
+          )}
+        </section>
+
+        <section className="panel">
+          <div className="panel-header compact">
+            <h3>{t.preview}</h3>
+            <StatusBadge tone={selected?.image_available ? "success" : "neutral"}>
+              {selected ? (selected.image_available ? t.available : t.missing) : t.selectOne}
+            </StatusBadge>
+          </div>
+          {selected?.image_available ? (
+            isPreviewLoading ? (
+              <p className="muted-copy">{t.previewLoading}</p>
+            ) : previewSrc ? (
+              <button
+                type="button"
+                className="search-preview-button"
+                onClick={() => setIsLargePreviewOpen(true)}
+                aria-label={`${t.openLargePreview}：${selectedPreviewLabel}`}
+                title={t.openLargePreview}
+              >
+                <img
+                  className="search-preview-image"
+                  src={previewSrc}
+                  alt={selectedPreviewLabel}
+                />
+              </button>
+            ) : (
+              <p className="muted-copy">{previewError ?? t.imageMissing}</p>
+            )
+          ) : selected ? (
+            <p className="muted-copy">{t.imageMissing}</p>
+          ) : (
+            <p className="muted-copy">{t.selectForPreview}</p>
+          )}
+        </section>
+
+        <section className="panel">
+          <div className="panel-header compact">
+            <h3>{t.jsonView}</h3>
+            <StatusBadge>{selected ? "page_analysis_v1" : t.selectOne}</StatusBadge>
+          </div>
+          <pre className="json-placeholder">
+            {selected?.page_json ??
+              `{\n  "status": "${t.selectForJson}"\n}`}
+          </pre>
+        </section>
+      </div>
+      {isLargePreviewOpen && previewSrc ? (
+        <div
+          className="image-lightbox"
+          role="dialog"
+          aria-modal="true"
+          aria-label={t.largePreviewTitle}
+          onClick={() => setIsLargePreviewOpen(false)}
+        >
+          <div
+            className="image-lightbox-frame"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="image-lightbox-header">
+              <p className="image-lightbox-title">{selectedPreviewLabel}</p>
+              <button
+                type="button"
+                className="image-lightbox-close"
+                onClick={() => setIsLargePreviewOpen(false)}
+                aria-label={t.closeLargePreview}
+                title={t.closeLargePreview}
+              >
+                ×
+              </button>
+            </div>
+            <div className="image-lightbox-body">
+              <img
+                className="image-lightbox-image"
+                src={previewSrc}
+                alt={selectedPreviewLabel}
+              />
+            </div>
+          </div>
         </div>
-        <pre className="json-placeholder">
-          {selected?.page_json ??
-            `{\n  "status": "${t.selectForJson}"\n}`}
-        </pre>
-      </section>
-    </div>
+      ) : null}
+    </>
   );
 }
 
