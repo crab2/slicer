@@ -40,7 +40,17 @@
       "Bash(taskkill /PID 20260 /F)",
       "Bash(Get-NetTCPConnection -LocalPort 1420 -ErrorAction SilentlyContinue)",
       "Bash(Select-Object OwningProcess)",
-      "PowerShell(Get-NetTCPConnection *)"
+      "PowerShell(Get-NetTCPConnection *)",
+      "Bash(git diff *)",
+      "Read(//tmp/**)",
+      "Bash(where soffice *)",
+      "Bash(timeout 30 npx tauri dev)",
+      "Bash(curl -s http://localhost:1420/health)",
+      "Bash(findstr \":1420 :3000 :8080 :7700 :7701\")",
+      "Bash(curl -s http://127.0.0.1:17321/health)",
+      "Bash(curl -s \"http://127.0.0.1:17321/search?q=test&limit=3\")",
+      "Bash(curl -s \"http://127.0.0.1:17321/documents\")",
+      "Bash(curl -s \"http://127.0.0.1:17321/pages/8e66b27a-9919-4110-b310-3423b322a27b_14\")"
     ]
   }
 }
