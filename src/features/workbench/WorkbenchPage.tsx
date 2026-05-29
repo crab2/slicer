@@ -10,6 +10,7 @@ import type {
   DocumentDto,
   ImportResultDto,
   JobDto,
+  MediaExportResultDto,
   ModelConfigurationStatusDto,
   PageWorkbenchDto,
   WorkspaceStatusDto,
@@ -41,6 +42,8 @@ export function WorkbenchPage({
   const workspaceReady = workspaceStatus.status === "ready";
   const workspaceKey = workspaceStatus.workspace_path ?? "current";
   const recoveredWorkspaceRef = useRef<string | null>(null);
+  const jobsGenRef = useRef(0);
+  const docsGenRef = useRef(0);
   const [jobs, setJobs] = useState<JobDto[]>([]);
   const [isJobsLoading, setIsJobsLoading] = useState(false);
   const [isCreatingDemo, setIsCreatingDemo] = useState(false);
@@ -68,6 +71,9 @@ export function WorkbenchPage({
   const [reanalyzingDocumentId, setReanalyzingDocumentId] = useState<string | null>(null);
   const [reanalyzingFailedDocumentId, setReanalyzingFailedDocumentId] = useState<string | null>(null);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<{ message: string; correlationId?: string | null } | null>(null);
+  const [exportResult, setExportResult] = useState<MediaExportResultDto | null>(null);
 
   async function refreshJobs(options: { recoverInterrupted?: boolean } = {}) {
     if (!workspaceReady) {
@@ -75,19 +81,21 @@ export function WorkbenchPage({
       return;
     }
 
+    const gen = ++jobsGenRef.current;
     setIsJobsLoading(true);
     setJobsError(null);
     try {
       if (options.recoverInterrupted) {
+        recoveredWorkspaceRef.current = workspaceKey;
         await tauriClient.recoverInterruptedJobs();
         await tauriClient.recoverInterruptedAnalysisPages();
-        recoveredWorkspaceRef.current = workspaceKey;
       }
-      setJobs(await tauriClient.listJobs());
+      const jobsResult = await tauriClient.listJobs();
+      if (gen === jobsGenRef.current) setJobs(jobsResult);
     } catch (error) {
-      setJobsError(extractError(error));
+      if (gen === jobsGenRef.current) setJobsError(extractError(error));
     } finally {
-      setIsJobsLoading(false);
+      if (gen === jobsGenRef.current) setIsJobsLoading(false);
     }
   }
 
@@ -97,10 +105,11 @@ export function WorkbenchPage({
       setPagesByDocument({});
       return;
     }
+    const gen = ++docsGenRef.current;
     setIsDocsLoading(true);
     try {
       const docs = await tauriClient.listDocuments();
-      setDocuments(docs);
+      if (gen !== docsGenRef.current) return;
       const pagesMap: Record<string, PageWorkbenchDto[]> = {};
       for (const doc of docs) {
         try {
@@ -110,12 +119,14 @@ export function WorkbenchPage({
         } catch {
           pagesMap[doc.document_id] = [];
         }
+        if (gen !== docsGenRef.current) return;
       }
+      setDocuments(docs);
       setPagesByDocument(pagesMap);
     } catch {
-      setDocuments([]);
+      if (gen === docsGenRef.current) setDocuments([]);
     } finally {
-      setIsDocsLoading(false);
+      if (gen === docsGenRef.current) setIsDocsLoading(false);
     }
   }
 
@@ -289,6 +300,22 @@ export function WorkbenchPage({
     }
   }
 
+  async function handleExport() {
+    setExportError(null);
+    setExportResult(null);
+    try {
+      const folder = await tauriClient.openExportFolderDialog();
+      if (!folder) return;
+      setIsExporting(true);
+      const result = await tauriClient.exportMedia(folder);
+      setExportResult(result);
+    } catch (error) {
+      setExportError(extractError(error));
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   async function executeAnalyzePage(pageId: string) {
     setAnalyzingPageId(pageId);
     try {
@@ -380,6 +407,8 @@ export function WorkbenchPage({
 
   useEffect(() => {
     let cancelled = false;
+    ++jobsGenRef.current;
+    ++docsGenRef.current;
     if (!workspaceReady) {
       setJobs([]);
       setJobsError(null);
@@ -398,6 +427,9 @@ export function WorkbenchPage({
       setReanalyzingDocumentId(null);
       setReanalyzingFailedDocumentId(null);
       setDeletingDocumentId(null);
+      setIsExporting(false);
+      setExportError(null);
+      setExportResult(null);
       return;
     }
 
@@ -414,6 +446,9 @@ export function WorkbenchPage({
     setReanalyzingDocumentId(null);
     setReanalyzingFailedDocumentId(null);
     setDeletingDocumentId(null);
+    setIsExporting(false);
+    setExportError(null);
+    setExportResult(null);
     void refreshJobs({
       recoverInterrupted: recoveredWorkspaceRef.current !== workspaceKey,
     });
@@ -439,18 +474,21 @@ export function WorkbenchPage({
     if (!workspaceReady || !isActive) {
       return;
     }
+    let cancelled = false;
     void refreshJobs();
     void refreshDocuments();
     void (async () => {
       setIsModelStatusLoading(true);
       try {
-        setModelStatus(await tauriClient.getModelConfigurationStatus());
+        const status = await tauriClient.getModelConfigurationStatus();
+        if (!cancelled) setModelStatus(status);
       } catch {
-        setModelStatus(null);
+        if (!cancelled) setModelStatus(null);
       } finally {
-        setIsModelStatusLoading(false);
+        if (!cancelled) setIsModelStatusLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, [workspaceReady, isActive]);
 
   const hasRunningAnalysis = useMemo(() => {
@@ -646,6 +684,40 @@ export function WorkbenchPage({
               {!modelStatus?.configured ? (
                 <Button onClick={onOpenSettings}>打开设置</Button>
               ) : null}
+            </div>
+          </section>
+
+          <section className="panel panel-wide">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">数据导出</p>
+                <h2>一键导出</h2>
+                <p className="muted-copy">
+                  将所有已分析页面导出为 Markdown 文件和媒体资源包，可直接用于 Obsidian 等工具。
+                </p>
+              </div>
+            </div>
+            {exportError ? (
+              <ErrorMessage
+                title="导出失败"
+                message={exportError.message}
+                correlationId={exportError.correlationId}
+              />
+            ) : null}
+            {exportResult ? (
+              <p className="muted-copy">
+                导出完成：{exportResult.document_count} 个文档，{exportResult.media_count} 个媒体文件。
+                Markdown 文件：{exportResult.markdown_path}
+              </p>
+            ) : null}
+            <div className="action-row workbench-actions">
+              <Button
+                variant="primary"
+                onClick={() => void handleExport()}
+                disabled={isExporting}
+              >
+                {isExporting ? "导出中..." : "一键导出"}
+              </Button>
             </div>
           </section>
 

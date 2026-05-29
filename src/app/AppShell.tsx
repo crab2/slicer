@@ -2,6 +2,9 @@ import { useEffect, useState } from "react";
 import { EmptyState } from "../components/common/EmptyState";
 import { ErrorMessage } from "../components/common/ErrorMessage";
 import { StatusBadge } from "../components/common/StatusBadge";
+import { AnalysisPage } from "../features/analysis/AnalysisPage";
+import { ExportPage } from "../features/export/ExportPage";
+import { IndexPage } from "../features/index/IndexPage";
 import { SearchPage } from "../features/search/SearchPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { WorkbenchPage } from "../features/workbench/WorkbenchPage";
@@ -11,6 +14,9 @@ import { navigationItems, type ViewId } from "./navigation";
 
 const pageTitles: Record<ViewId, string> = {
   workbench: "工作台",
+  analysis: "模型分析",
+  export: "一键导出",
+  index: "BM25 索引",
   search: "搜索",
   settings: "设置",
 };
@@ -117,6 +123,25 @@ export function AppShell() {
               isActive={activeView === "workbench"}
               onChooseWorkspace={handleChooseWorkspace}
               onOpenSettings={() => setActiveView("settings")}
+            />
+          </div>
+
+          <div hidden={activeView !== "analysis"}>
+            <AnalysisPage
+              workspaceReady={workspaceReady}
+              isActive={activeView === "analysis"}
+              onOpenSettings={() => setActiveView("settings")}
+            />
+          </div>
+
+          <div hidden={activeView !== "export"}>
+            <ExportPage workspaceReady={workspaceReady} />
+          </div>
+
+          <div hidden={activeView !== "index"}>
+            <IndexPage
+              workspaceReady={workspaceReady}
+              isActive={activeView === "index"}
             />
           </div>
 

@@ -96,7 +96,17 @@ impl LedgerRepository {
             .await
             .map_err(|err| database_error("ledger", "jobs_read_failed", err))?;
 
-            rows.into_iter().map(job_from_row).collect()
+            let jobs: Vec<JobDto> = rows
+                .into_iter()
+                .filter_map(|row| match job_from_row(row) {
+                    Ok(job) => Some(job),
+                    Err(err) => {
+                        eprintln!("WARN: skipping corrupted job row: {}", err);
+                        None
+                    }
+                })
+                .collect();
+            Ok(jobs)
         })
     }
 
@@ -110,6 +120,7 @@ impl LedgerRepository {
             run_migrations(self.layout.app_db_path()).await?;
             let mut connection = connect_workspace_db(self.layout.app_db_path()).await?;
             let now = Utc::now().to_rfc3339();
+            let progress = progress.min(100);
             let status = if progress >= 100 {
                 JobStatus::Succeeded.as_str()
             } else {
@@ -195,37 +206,50 @@ impl LedgerRepository {
 
             let mut recovered = Vec::new();
             for job_id in running_ids {
-                let error = AppError::new(
-                    "job_interrupted",
-                    INTERRUPTED_JOB_SUMMARY,
-                    "job_recovery",
-                    true,
-                );
-                let error_id = insert_error(&mut connection, &error).await?;
-                let now = Utc::now().to_rfc3339();
-                sqlx::query(
-                    "UPDATE jobs
-                     SET status = ?1, updated_at = ?2, error_id = ?3, error_summary = ?4
-                     WHERE job_id = ?5",
-                )
-                .bind(JobStatus::Failed.as_str())
-                .bind(now)
-                .bind(error_id)
-                .bind(INTERRUPTED_JOB_SUMMARY)
-                .bind(&job_id)
-                .execute(&mut connection)
-                .await
-                .map_err(|err| database_error("ledger", "job_recovery_update_failed", err))?;
+                let result = async {
+                    let error = AppError::new(
+                        "job_interrupted",
+                        INTERRUPTED_JOB_SUMMARY,
+                        "job_recovery",
+                        true,
+                    );
+                    let error_id = insert_error(&mut connection, &error).await?;
+                    let now = Utc::now().to_rfc3339();
+                    sqlx::query(
+                        "UPDATE jobs
+                         SET status = ?1, updated_at = ?2, error_id = ?3, error_summary = ?4
+                         WHERE job_id = ?5",
+                    )
+                    .bind(JobStatus::Failed.as_str())
+                    .bind(now)
+                    .bind(error_id)
+                    .bind(INTERRUPTED_JOB_SUMMARY)
+                    .bind(&job_id)
+                    .execute(&mut connection)
+                    .await
+                    .map_err(|err| database_error("ledger", "job_recovery_update_failed", err))?;
 
-                insert_job_event(
-                    &mut connection,
-                    &job_id,
-                    "recovered_as_failed",
-                    Some(INTERRUPTED_JOB_SUMMARY),
-                    None,
-                )
-                .await?;
-                recovered.push(fetch_job(&mut connection, &job_id).await?);
+                    insert_job_event(
+                        &mut connection,
+                        &job_id,
+                        "recovered_as_failed",
+                        Some(INTERRUPTED_JOB_SUMMARY),
+                        None,
+                    )
+                    .await?;
+                    fetch_job(&mut connection, &job_id).await
+                }
+                .await;
+
+                match result {
+                    Ok(job) => recovered.push(job),
+                    Err(err) => {
+                        eprintln!(
+                            "WARN: failed to recover job {}: {}",
+                            job_id, err
+                        );
+                    }
+                }
             }
 
             Ok(recovered)

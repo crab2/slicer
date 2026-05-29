@@ -35,7 +35,7 @@
 # - Dev moves story to 'review', then runs code-review (fresh context, different LLM recommended)
 
 generated: 2026-05-18T13:43:32.8181438+08:00
-last_updated: 2026-05-27T00:00:00+08:00
+last_updated: 2026-05-28T00:00:00+08:00
 project: slicer
 project_key: NOKEY
 tracking_system: file-system
@@ -79,7 +79,7 @@ development_status:
   4-5-searchservice-查询结果-dto-与页面可追溯返回: done
   4-6-搜索页基础体验-输入-结果列表-图片预览与-json-查看: done
   4-7-索引重建入口-状态展示与搜索体验收口: done
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
 
   epic-5: done
   5-1-嵌入式-axum-localhost-api-服务基础与设置控制: done

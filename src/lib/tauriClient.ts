@@ -15,6 +15,7 @@ import type {
   DocumentDto,
   ImportResultDto,
   JobDto,
+  MediaExportResultDto,
   PageRecordDto,
   PageWorkbenchDto,
   IndexRebuildStartDto,
@@ -185,4 +186,10 @@ export const tauriClient = {
   getApiServerStatus: () =>
     callTauriCommand<ApiServerStatusDto>("get_api_server_status"),
   resetApiToken: () => callTauriCommand<string>("reset_api_token"),
+  openExportFolderDialog: async () => {
+    const selected = await open({ directory: true, multiple: false });
+    return selected;
+  },
+  exportMedia: (destination: string) =>
+    callTauriCommand<MediaExportResultDto>("export_media", { destination }),
 };
