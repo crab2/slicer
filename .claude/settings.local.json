@@ -24,7 +24,23 @@
       "Bash(git -C \"D:/AIProject/slicer\" log --oneline --all)",
       "Bash(git *)",
       "PowerShell(node -v)",
-      "PowerShell(py *)"
+      "PowerShell(py *)",
+      "Bash(npm run *)",
+      "Bash(New-Item -ItemType Directory -Force -Path \"D:\\\\AIProject\\\\slicer\\\\test-workspace\\\\originals\")",
+      "Bash(Out-Null)",
+      "Bash(New-Item -ItemType Directory -Force -Path \"D:\\\\AIProject\\\\slicer\\\\test-workspace\\\\pages\")",
+      "Bash(New-Item -ItemType Directory -Force -Path \"D:\\\\AIProject\\\\slicer\\\\test-workspace\\\\metadata\")",
+      "Bash(New-Item -ItemType Directory -Force -Path \"D:\\\\AIProject\\\\slicer\\\\test-workspace\\\\indexes\")",
+      "Bash(Write-Host \"验收工作区目录结构已创建\")",
+      "PowerShell(New-Item *)",
+      "Bash(powershell -ExecutionPolicy Bypass -File prepare-tests.ps1)",
+      "Bash(netstat -ano)",
+      "Bash(findstr :1420)",
+      "Bash(taskkill /PID 18888 /F)",
+      "Bash(taskkill /PID 20260 /F)",
+      "Bash(Get-NetTCPConnection -LocalPort 1420 -ErrorAction SilentlyContinue)",
+      "Bash(Select-Object OwningProcess)",
+      "PowerShell(Get-NetTCPConnection *)"
     ]
   }
 }

@@ -239,3 +239,10 @@ export interface ApiKeyRecordDto {
 export interface ApiKeyListDto {
   keys: ApiKeyRecordDto[];
 }
+
+export interface MediaExportResultDto {
+  markdown_path: string;
+  export_dir: string;
+  document_count: number;
+  media_count: number;
+}

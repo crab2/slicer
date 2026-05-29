@@ -10,6 +10,7 @@ import type {
   DocumentDto,
   ImportResultDto,
   JobDto,
+  MediaExportResultDto,
   ModelConfigurationStatusDto,
   PageWorkbenchDto,
   WorkspaceStatusDto,
@@ -68,6 +69,9 @@ export function WorkbenchPage({
   const [reanalyzingDocumentId, setReanalyzingDocumentId] = useState<string | null>(null);
   const [reanalyzingFailedDocumentId, setReanalyzingFailedDocumentId] = useState<string | null>(null);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
+  const [exportError, setExportError] = useState<{ message: string; correlationId?: string | null } | null>(null);
+  const [exportResult, setExportResult] = useState<MediaExportResultDto | null>(null);
 
   async function refreshJobs(options: { recoverInterrupted?: boolean } = {}) {
     if (!workspaceReady) {
@@ -289,6 +293,22 @@ export function WorkbenchPage({
     }
   }
 
+  async function handleExport() {
+    setExportError(null);
+    setExportResult(null);
+    try {
+      const folder = await tauriClient.openExportFolderDialog();
+      if (!folder) return;
+      setIsExporting(true);
+      const result = await tauriClient.exportMedia(folder);
+      setExportResult(result);
+    } catch (error) {
+      setExportError(extractError(error));
+    } finally {
+      setIsExporting(false);
+    }
+  }
+
   async function executeAnalyzePage(pageId: string) {
     setAnalyzingPageId(pageId);
     try {
@@ -398,6 +418,9 @@ export function WorkbenchPage({
       setReanalyzingDocumentId(null);
       setReanalyzingFailedDocumentId(null);
       setDeletingDocumentId(null);
+      setIsExporting(false);
+      setExportError(null);
+      setExportResult(null);
       return;
     }
 
@@ -414,6 +437,9 @@ export function WorkbenchPage({
     setReanalyzingDocumentId(null);
     setReanalyzingFailedDocumentId(null);
     setDeletingDocumentId(null);
+    setIsExporting(false);
+    setExportError(null);
+    setExportResult(null);
     void refreshJobs({
       recoverInterrupted: recoveredWorkspaceRef.current !== workspaceKey,
     });
@@ -646,6 +672,40 @@ export function WorkbenchPage({
               {!modelStatus?.configured ? (
                 <Button onClick={onOpenSettings}>打开设置</Button>
               ) : null}
+            </div>
+          </section>
+
+          <section className="panel panel-wide">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">数据导出</p>
+                <h2>一键导出</h2>
+                <p className="muted-copy">
+                  将所有已分析页面导出为 Markdown 文件和媒体资源包，可直接用于 Obsidian 等工具。
+                </p>
+              </div>
+            </div>
+            {exportError ? (
+              <ErrorMessage
+                title="导出失败"
+                message={exportError.message}
+                correlationId={exportError.correlationId}
+              />
+            ) : null}
+            {exportResult ? (
+              <p className="muted-copy">
+                导出完成：{exportResult.document_count} 个文档，{exportResult.media_count} 个媒体文件。
+                Markdown 文件：{exportResult.markdown_path}
+              </p>
+            ) : null}
+            <div className="action-row workbench-actions">
+              <Button
+                variant="primary"
+                onClick={() => void handleExport()}
+                disabled={isExporting}
+              >
+                {isExporting ? "导出中..." : "一键导出"}
+              </Button>
             </div>
           </section>
 

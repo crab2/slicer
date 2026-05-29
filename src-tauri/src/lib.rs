@@ -16,6 +16,7 @@ use commands::analysis_commands::{
 };
 use commands::api_commands::{get_api_server_status, reset_api_token};
 use commands::diagnostics_commands::record_diagnostic_error;
+use commands::export_commands::export_media;
 use commands::import_commands::{
     delete_document, import_pdf, list_documents, list_pages, retry_import,
 };
@@ -121,7 +122,8 @@ pub fn run() {
             get_page_image_preview,
             start_index_rebuild,
             get_api_server_status,
-            reset_api_token
+            reset_api_token,
+            export_media
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
