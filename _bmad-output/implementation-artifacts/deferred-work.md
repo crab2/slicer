@@ -18,3 +18,11 @@ Collected during story 1.4 review (2026-05-18).
 - **progress 边界校验**: Rust 端 update_job_progress 接受 u8 (0-255)，SQL CHECK 仅限 0-100。orchestrator 层应 clamp 到 0-100。
 - **recover_interrupted_jobs 非原子**: 循环中单个 UPDATE 失败会导致部分恢复。考虑事务或逐条容错。
 - **job_from_row 脆弱**: 单行数据损坏会导致整个 list_jobs 失败。考虑跳过坏行并记录警告。
+
+## Deferred from: MVP review (2026-05-28)
+
+- **recover_interrupted_jobs 共享 DB 连接**: per-job 容错后，单个 job 的 SQLite 级错误（连接损坏）会影响后续 job。可考虑失败后重建连接。
+- **recover_interrupted_jobs 无事务包装**: 每个 job 恢复执行 4 次独立 SQL 操作，大量 job 时性能差。可考虑批量事务。
+- **media_exporter 部分导出无回滚**: 导出中途失败时，已复制的文件和目录结构残留，无清理逻辑。
+- **extractError/computeAnalysisStats 重复定义**: WorkbenchPage、AnalysisPage、ExportPage 三处相同函数，应提取为共享工具模块。
+- **ExportPage 与 WorkbenchPage 导出 UI 重复**: 两处相同的导出面板，应抽取为共享组件。
