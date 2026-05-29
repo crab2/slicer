@@ -113,6 +113,9 @@ impl MediaExporter {
 
         let wiki_path = markdown_filename.clone();
         let media_export_dir = destination.join("media-export");
+        fs::create_dir_all(&media_export_dir).map_err(|e| {
+            AppError::io("export", "export_dir_create_failed", e)
+        })?;
 
         // Build markdown and collect media entries
         let mut markdown_content = String::new();
@@ -273,6 +276,9 @@ fn compute_sha256(bytes: &[u8]) -> String {
 fn atomic_write_str(path: &Path, content: &str) -> AppResult<()> {
     let tmp = path.with_extension("tmp");
     fs::write(&tmp, content).map_err(|e| AppError::io("export", "export_write_failed", e))?;
-    fs::rename(&tmp, path).map_err(|e| AppError::io("export", "export_write_failed", e))?;
+    fs::rename(&tmp, path).map_err(|e| {
+        let _ = fs::remove_file(&tmp);
+        AppError::io("export", "export_write_failed", e)
+    })?;
     Ok(())
 }

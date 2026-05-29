@@ -42,6 +42,8 @@ export function WorkbenchPage({
   const workspaceReady = workspaceStatus.status === "ready";
   const workspaceKey = workspaceStatus.workspace_path ?? "current";
   const recoveredWorkspaceRef = useRef<string | null>(null);
+  const jobsGenRef = useRef(0);
+  const docsGenRef = useRef(0);
   const [jobs, setJobs] = useState<JobDto[]>([]);
   const [isJobsLoading, setIsJobsLoading] = useState(false);
   const [isCreatingDemo, setIsCreatingDemo] = useState(false);
@@ -79,19 +81,21 @@ export function WorkbenchPage({
       return;
     }
 
+    const gen = ++jobsGenRef.current;
     setIsJobsLoading(true);
     setJobsError(null);
     try {
       if (options.recoverInterrupted) {
+        recoveredWorkspaceRef.current = workspaceKey;
         await tauriClient.recoverInterruptedJobs();
         await tauriClient.recoverInterruptedAnalysisPages();
-        recoveredWorkspaceRef.current = workspaceKey;
       }
-      setJobs(await tauriClient.listJobs());
+      const jobsResult = await tauriClient.listJobs();
+      if (gen === jobsGenRef.current) setJobs(jobsResult);
     } catch (error) {
-      setJobsError(extractError(error));
+      if (gen === jobsGenRef.current) setJobsError(extractError(error));
     } finally {
-      setIsJobsLoading(false);
+      if (gen === jobsGenRef.current) setIsJobsLoading(false);
     }
   }
 
@@ -101,10 +105,11 @@ export function WorkbenchPage({
       setPagesByDocument({});
       return;
     }
+    const gen = ++docsGenRef.current;
     setIsDocsLoading(true);
     try {
       const docs = await tauriClient.listDocuments();
-      setDocuments(docs);
+      if (gen !== docsGenRef.current) return;
       const pagesMap: Record<string, PageWorkbenchDto[]> = {};
       for (const doc of docs) {
         try {
@@ -114,12 +119,14 @@ export function WorkbenchPage({
         } catch {
           pagesMap[doc.document_id] = [];
         }
+        if (gen !== docsGenRef.current) return;
       }
+      setDocuments(docs);
       setPagesByDocument(pagesMap);
     } catch {
-      setDocuments([]);
+      if (gen === docsGenRef.current) setDocuments([]);
     } finally {
-      setIsDocsLoading(false);
+      if (gen === docsGenRef.current) setIsDocsLoading(false);
     }
   }
 
@@ -400,6 +407,8 @@ export function WorkbenchPage({
 
   useEffect(() => {
     let cancelled = false;
+    ++jobsGenRef.current;
+    ++docsGenRef.current;
     if (!workspaceReady) {
       setJobs([]);
       setJobsError(null);
@@ -465,18 +474,21 @@ export function WorkbenchPage({
     if (!workspaceReady || !isActive) {
       return;
     }
+    let cancelled = false;
     void refreshJobs();
     void refreshDocuments();
     void (async () => {
       setIsModelStatusLoading(true);
       try {
-        setModelStatus(await tauriClient.getModelConfigurationStatus());
+        const status = await tauriClient.getModelConfigurationStatus();
+        if (!cancelled) setModelStatus(status);
       } catch {
-        setModelStatus(null);
+        if (!cancelled) setModelStatus(null);
       } finally {
-        setIsModelStatusLoading(false);
+        if (!cancelled) setIsModelStatusLoading(false);
       }
     })();
+    return () => { cancelled = true; };
   }, [workspaceReady, isActive]);
 
   const hasRunningAnalysis = useMemo(() => {
