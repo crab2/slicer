@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Button } from "../../components/common/Button";
 import { ErrorMessage } from "../../components/common/ErrorMessage";
 import { EmptyState } from "../../components/common/EmptyState";
@@ -55,6 +56,7 @@ export function WorkbenchPage({
   >({});
   const [isDocsLoading, setIsDocsLoading] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
+  const [isDragActive, setIsDragActive] = useState(false);
   const [importError, setImportError] = useState<{ message: string; correlationId?: string | null } | null>(null);
   const [importResults, setImportResults] = useState<ImportResultDto[]>([]);
   const [modelStatus, setModelStatus] = useState<ModelConfigurationStatusDto | null>(null);
@@ -75,6 +77,15 @@ export function WorkbenchPage({
   const [isExporting, setIsExporting] = useState(false);
   const [exportError, setExportError] = useState<{ message: string; correlationId?: string | null } | null>(null);
   const [exportResult, setExportResult] = useState<MediaExportResultDto | null>(null);
+  const importLockRef = useRef(false);
+  const workspaceReadyRef = useRef(workspaceReady);
+  const isActiveRef = useRef(isActive);
+  const documentsRef = useRef<DocumentDto[]>(documents);
+  const importDocumentFilesRef = useRef<(filePaths: string[]) => Promise<void>>(async () => undefined);
+
+  workspaceReadyRef.current = workspaceReady;
+  isActiveRef.current = isActive;
+  documentsRef.current = documents;
 
   async function refreshJobs(options: { recoverInterrupted?: boolean } = {}) {
     if (!workspaceReady) {
@@ -132,51 +143,177 @@ export function WorkbenchPage({
   }
 
   async function handleImportDocuments() {
+    if (importLockRef.current) {
+      return;
+    }
     const selected = await tauriClient.openImportDialog();
     if (!selected) return;
     const filePaths = Array.isArray(selected) ? selected : [selected];
-    if (filePaths.length === 0) return;
+    await importDocumentFiles(filePaths);
+  }
 
+  async function importDocumentFiles(filePaths: string[]) {
+    await importDocumentFilesWithInitialResults(filePaths, []);
+  }
+
+  async function importDocumentFilesWithInitialResults(
+    filePaths: unknown[],
+    initialResults: ImportResultDto[],
+  ) {
+    if (importLockRef.current) {
+      return;
+    }
+
+    const normalizedPaths = normalizeImportPaths(filePaths);
+    if (normalizedPaths.length === 0 && initialResults.length === 0) {
+      return;
+    }
+
+    importLockRef.current = true;
     setIsImporting(true);
+    setIsDragActive(false);
     setImportError(null);
-    setImportResults([]);
+    setImportResults(initialResults);
 
-    const existingIds = new Set(documents.map((d) => d.document_id));
-    const results: ImportResultDto[] = [];
+    let existingIds = new Set(documentsRef.current.map((d) => d.document_id));
+    try {
+      const latestDocuments = await tauriClient.listDocuments();
+      existingIds = new Set(latestDocuments.map((doc) => doc.document_id));
+    } catch {
+      existingIds = new Set(documentsRef.current.map((d) => d.document_id));
+    }
+    const results: ImportResultDto[] = [...initialResults];
 
-    for (const filePath of filePaths) {
-      const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
-      if (!isDocumentFileType(filePath)) {
-        results.push({
-          file_name: fileName,
-          status: "unsupported",
-          error: getUnsupportedDocumentReason(filePath),
-        });
+    try {
+      for (const filePath of normalizedPaths) {
+        const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
+        if (!isDocumentFileType(filePath)) {
+          results.push({
+            file_name: fileName,
+            status: "unsupported",
+            error: getUnsupportedDocumentReason(filePath),
+          });
+          setImportResults([...results]);
+          continue;
+        }
+
+        try {
+          const doc = await tauriClient.importPdf(filePath);
+          results.push({
+            file_name: fileName,
+            status: existingIds.has(doc.document_id) ? "duplicate" : "success",
+            document: doc,
+          });
+          existingIds.add(doc.document_id);
+        } catch (error) {
+          const errInfo = extractError(error);
+          results.push({
+            file_name: fileName,
+            status: "failed",
+            error: errInfo.message,
+          });
+        }
         setImportResults([...results]);
-        continue;
       }
 
       try {
-        const doc = await tauriClient.importPdf(filePath);
-        results.push({
-          file_name: fileName,
-          status: existingIds.has(doc.document_id) ? "duplicate" : "success",
-          document: doc,
-        });
-        existingIds.add(doc.document_id);
+        await Promise.all([refreshDocuments(), refreshJobs()]);
       } catch (error) {
-        const errInfo = extractError(error);
-        results.push({
-          file_name: fileName,
-          status: "failed",
-          error: errInfo.message,
-        });
+        setImportError(extractError(error));
       }
-      setImportResults([...results]);
+    } catch (error) {
+      setImportError(extractError(error));
+    } finally {
+      importLockRef.current = false;
+      setIsImporting(false);
+    }
+  }
+
+  importDocumentFilesRef.current = importDocumentFiles;
+
+  function showImportBusyDropResult() {
+    setImportError(null);
+    setImportResults([
+      {
+        file_name: "拖拽内容",
+        status: "failed",
+        error: "已有导入正在进行，请等待当前批次完成后再拖入新文件。",
+      },
+    ]);
+  }
+
+  function canAcceptDocumentDrop() {
+    return workspaceReady && isActive && !importLockRef.current;
+  }
+
+  function handleDragEnter(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (canAcceptDocumentDrop()) {
+      setIsDragActive(true);
+    }
+  }
+
+  function handleDragOver(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (canAcceptDocumentDrop()) {
+      event.dataTransfer.dropEffect = "copy";
+      setIsDragActive(true);
+    } else {
+      event.dataTransfer.dropEffect = "none";
+    }
+  }
+
+  function handleDragLeave(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const nextTarget = event.relatedTarget;
+    if (!(nextTarget instanceof Node) || !event.currentTarget.contains(nextTarget)) {
+      setIsDragActive(false);
+    }
+  }
+
+  async function handleDrop(event: React.DragEvent<HTMLElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsDragActive(false);
+    if (!canAcceptDocumentDrop()) {
+      if (importLockRef.current) {
+        showImportBusyDropResult();
+      }
+      return;
     }
 
-    await Promise.all([refreshDocuments(), refreshJobs()]);
-    setIsImporting(false);
+    const files = Array.from(event.dataTransfer.files);
+    const filePaths: string[] = [];
+    const pathlessResults: ImportResultDto[] = [];
+    for (const file of files) {
+      const path = getDroppedFilePath(file);
+      if (path) {
+        filePaths.push(path);
+      } else {
+        pathlessResults.push({
+          file_name: file.name || "拖拽文件",
+          status: "failed",
+          error: "无法从拖拽事件读取本地路径，请使用“选择文件”导入。",
+        });
+      }
+    }
+
+    if (filePaths.length === 0 && pathlessResults.length === 0) {
+      setImportError(null);
+      setImportResults([
+        {
+          file_name: "拖拽内容",
+          status: "failed",
+          error: "请拖入本地文件。",
+        },
+      ]);
+      return;
+    }
+
+    await importDocumentFilesWithInitialResults(filePaths, pathlessResults);
   }
 
   async function handleRetryImport(documentId: string) {
@@ -532,18 +669,91 @@ export function WorkbenchPage({
     return () => window.clearInterval(timer);
   }, [workspaceReady, isActive, hasRunningAnalysis]);
 
-  const analysisStats = computeAnalysisStats(documents, pagesByDocument);
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    try {
+      void getCurrentWindow()
+        .onDragDropEvent((event) => {
+          const canAcceptDrop =
+            workspaceReadyRef.current && isActiveRef.current && !importLockRef.current;
+          if (event.payload.type === "enter" || event.payload.type === "over") {
+            setIsDragActive(canAcceptDrop);
+            return;
+          }
+          if (event.payload.type === "leave") {
+            setIsDragActive(false);
+            return;
+          }
+          setIsDragActive(false);
+          if (event.payload.type !== "drop") {
+            return;
+          }
+          if (!canAcceptDrop) {
+            if (importLockRef.current) {
+              showImportBusyDropResult();
+            }
+            return;
+          }
+          const paths = Array.isArray(event.payload.paths) ? event.payload.paths : [];
+          if (paths.length > 0) {
+            void importDocumentFilesRef.current(paths);
+          }
+        })
+        .then((nextUnlisten) => {
+          if (cancelled) {
+            nextUnlisten();
+          } else {
+            unlisten = nextUnlisten;
+          }
+        })
+        .catch(() => {
+          unlisten = null;
+        });
+    } catch {
+      unlisten = null;
+    }
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    if ((!workspaceReady || !isActive || isImporting) && isDragActive) {
+      setIsDragActive(false);
+    }
+  }, [workspaceReady, isActive, isImporting, isDragActive]);
+
+  const analysisStats = useMemo(
+    () => computeAnalysisStats(documents, pagesByDocument),
+    [documents, pagesByDocument],
+  );
+  const workbenchStats = useMemo(
+    () => computeWorkbenchStats(documents, pagesByDocument, jobs),
+    [documents, pagesByDocument, jobs],
+  );
   const analysisConfigured =
     modelStatus?.configured &&
     (!modelStatus.requires_privacy_notice || modelStatus.privacy_notice_accepted);
 
   return (
-    <div className="page-grid">
-      <section className="panel panel-wide">
+    <div
+      className="page-grid workbench-page"
+      data-drag-active={isDragActive}
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={(event) => void handleDrop(event)}
+    >
+      <section className="panel panel-wide workbench-overview-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">应用名称</p>
-            <h2>SLICER</h2>
+            <p className="eyebrow">工作台</p>
+            <h2>把本地文档变成页面资产</h2>
+            <p className="muted-copy">
+              导入 PDF 或 Office 文档后，SLICER 会在本地生成逐页图片，并保留分析、索引和搜索入口。
+            </p>
           </div>
           <StatusBadge tone={workspaceReady ? "success" : "warning"}>
             {workspaceReady ? "工作区可用" : "尚未选择工作区"}
@@ -566,28 +776,38 @@ export function WorkbenchPage({
 
       {workspaceReady ? (
         <>
-          <section className="panel panel-wide">
-            <div className="panel-header">
-              <div>
-                <p className="eyebrow">文档导入</p>
-                <h2>导入文档</h2>
+          <section className="panel panel-wide import-drop-panel">
+            <div className="import-drop-zone" data-active={isDragActive}>
+              <div className="import-drop-copy">
+                <p className="eyebrow">批量导入</p>
+                <h2>{isDragActive ? "松开即可导入文档" : "拖入文档，自动开始转换"}</h2>
                 <p className="muted-copy">
-                  选择 PDF 或 Office 文档导入工作区，系统会自动转换并渲染为逐页 PNG。
+                  支持 PDF、DOC、DOCX、PPT、PPTX。页面图片生成后会立即出现在下方资产列表。
                 </p>
+              </div>
+              <div className="action-row workbench-actions">
+                <Button
+                  variant="primary"
+                  onClick={() => void handleImportDocuments()}
+                  disabled={isImporting}
+                >
+                  {isImporting ? "导入中..." : "选择文件"}
+                </Button>
               </div>
             </div>
             {importError ? (
               <p className="job-error">导入失败：{importError.message}</p>
             ) : null}
             <ImportResultList results={importResults} />
-            <div className="action-row workbench-actions">
-              <Button
-                variant="primary"
-                onClick={() => void handleImportDocuments()}
-                disabled={isImporting}
-              >
-                {isImporting ? "导入中..." : "选择文件"}
-              </Button>
+          </section>
+
+          <section className="panel panel-wide workbench-summary-panel" aria-label="工作台资产摘要">
+            <div className="workbench-summary-grid">
+              <WorkbenchMetric label="文档" value={workbenchStats.documentCount} helper="已进入工作区" />
+              <WorkbenchMetric label="页面图片" value={workbenchStats.generatedPages} helper={`共 ${workbenchStats.totalPages} 页`} />
+              <WorkbenchMetric label="待分析" value={analysisStats.pendingPages} helper="页面可查看" />
+              <WorkbenchMetric label="失败" value={workbenchStats.failureCount} helper="可按项处理" tone={workbenchStats.failureCount > 0 ? "danger" : "neutral"} />
+              <WorkbenchMetric label="处理中" value={workbenchStats.runningJobs} helper="任务队列" />
             </div>
           </section>
 
@@ -596,6 +816,7 @@ export function WorkbenchPage({
             pagesByDocument={pagesByDocument}
             jobs={jobs}
             isLoading={isDocsLoading}
+            workspacePath={workspaceStatus.workspace_path}
             onRetry={(id) => void handleRetryImport(id)}
             onAnalyzePage={(pageId) => void handleAnalyzePage(pageId)}
             onReanalyzeDocument={(documentId) => void handleReanalyzeDocument(documentId)}
@@ -763,6 +984,26 @@ function formatMissingFields(missing: string[]): string {
   return missing.map((key) => labels[key] ?? key).join("、") || "模型配置";
 }
 
+function WorkbenchMetric({
+  label,
+  value,
+  helper,
+  tone = "neutral",
+}: {
+  label: string;
+  value: number;
+  helper: string;
+  tone?: "neutral" | "danger";
+}) {
+  return (
+    <div className="workbench-metric" data-tone={tone}>
+      <span className="workbench-metric-label">{label}</span>
+      <strong className="workbench-metric-value">{value}</strong>
+      <span className="workbench-metric-helper">{helper}</span>
+    </div>
+  );
+}
+
 function computeAnalysisStats(
   documents: DocumentDto[],
   pagesByDocument: Record<string, PageWorkbenchDto[]>,
@@ -798,6 +1039,46 @@ function computeAnalysisStats(
   };
 }
 
+function computeWorkbenchStats(
+  documents: DocumentDto[],
+  pagesByDocument: Record<string, PageWorkbenchDto[]>,
+  jobs: JobDto[],
+) {
+  let totalPages = 0;
+  let generatedPages = 0;
+  let failedPages = 0;
+
+  for (const doc of documents) {
+    const pages = pagesByDocument[doc.document_id] ?? [];
+    totalPages += doc.page_count ?? pages.length;
+    let documentGeneratedPages = 0;
+    let documentFailedPages = 0;
+    for (const page of pages) {
+      if (page.image_path) {
+        documentGeneratedPages += 1;
+      }
+      if (page.status === "failed") {
+        documentFailedPages += 1;
+      }
+    }
+    generatedPages += documentGeneratedPages;
+    failedPages += Math.max(documentFailedPages, doc.analysis_failed_pages);
+  }
+
+  const failedDocuments = documents.filter((doc) => doc.status === "failed").length;
+  const runningJobs = jobs.filter(
+    (job) => job.status === "queued" || job.status === "running",
+  ).length;
+
+  return {
+    documentCount: documents.length,
+    totalPages,
+    generatedPages,
+    failureCount: failedDocuments + failedPages,
+    runningJobs,
+  };
+}
+
 function formatBatchMessage(prefix: string, result: AnalysisBatchResultDto) {
   return `${prefix}：共 ${result.total_pages} 页，成功 ${result.succeeded_pages} 页，失败 ${result.failed_pages} 页，跳过 ${result.skipped_pages} 页。`;
 }
@@ -822,6 +1103,25 @@ function resolveWorkspacePath(
   const separator = workspacePath.includes("\\") ? "\\" : "/";
   const root = workspacePath.replace(/[\\/]+$/, "");
   return `${root}${separator}${normalized.replace(/\//g, separator)}`;
+}
+
+function normalizeImportPaths(filePaths: unknown[]) {
+  const uniquePaths = new Set<string>();
+  for (const filePath of filePaths) {
+    if (typeof filePath !== "string") {
+      continue;
+    }
+    const trimmedPath = filePath.trim();
+    if (trimmedPath.length > 0) {
+      uniquePaths.add(trimmedPath);
+    }
+  }
+  return [...uniquePaths];
+}
+
+function getDroppedFilePath(file: File) {
+  const fileWithPath = file as File & { path?: unknown };
+  return typeof fileWithPath.path === "string" ? fileWithPath.path : null;
 }
 
 function extractError(error: unknown): { message: string; correlationId?: string | null } {

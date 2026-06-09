@@ -1,5 +1,9 @@
 # Deferred Work
 
+## Deferred from: workbench UI polish review (2026-06-09)
+
+- `src/features/workbench/components/JobList.tsx` 仍保留“创建示例任务”和“不会触发真实业务处理”的 placeholder 文案。该问题来自既有任务列表，不属于本次工作台导入接收/资产摘要/页面预览 slice，但会削弱工作台的真实产品感，后续应单独移除或改为真实诊断/恢复入口。
+
 ## Deferred from: code review of 3-5-分析失败处理-单页重试与安全诊断.md (2026-05-19)
 
 - 工作台 `globals.css` 将 `body`/`.app-shell` 设为 `overflow: hidden`，可能影响小屏或长内容滚动；属布局侧效应，非 3.5 诊断核心。
