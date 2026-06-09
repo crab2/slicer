@@ -657,6 +657,14 @@ h3 {
   font-family: monospace;
 }
 
+.error-details {
+  margin: 6px 0 0;
+  color: #6b4a12;
+  font-size: 12px;
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
 .json-placeholder {
   overflow: auto;
   margin: 0;
@@ -746,6 +754,22 @@ h3 {
 .setting-fields select:focus {
   outline: 2px solid #245b64;
   outline-offset: -1px;
+}
+
+.model-name-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.model-name-row input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.model-name-row .button {
+  flex-shrink: 0;
 }
 
 .api-key-field {

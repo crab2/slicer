@@ -54,6 +54,17 @@ export interface ModelConfigurationStatusDto {
   requires_privacy_notice: boolean;
 }
 
+export interface ModelInfoDto {
+  id: string;
+  display_name?: string | null;
+  owned_by?: string | null;
+}
+
+export interface ModelListDto {
+  provider: string;
+  models: ModelInfoDto[];
+}
+
 export interface PrivacyNoticeStatusDto {
   accepted: boolean;
   requires_notice: boolean;

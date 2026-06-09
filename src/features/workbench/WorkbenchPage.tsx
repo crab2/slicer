@@ -5,6 +5,7 @@ import { EmptyState } from "../../components/common/EmptyState";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { PrivacyNotice } from "../settings/components/PrivacyNotice";
 import { tauriClient } from "../../lib/tauriClient";
+import { getUnsupportedDocumentReason, isDocumentFileType } from "../../lib/fileValidation";
 import type {
   AnalysisBatchResultDto,
   DocumentDto,
@@ -130,7 +131,7 @@ export function WorkbenchPage({
     }
   }
 
-  async function handleImportPdf() {
+  async function handleImportDocuments() {
     const selected = await tauriClient.openImportDialog();
     if (!selected) return;
     const filePaths = Array.isArray(selected) ? selected : [selected];
@@ -145,6 +146,16 @@ export function WorkbenchPage({
 
     for (const filePath of filePaths) {
       const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
+      if (!isDocumentFileType(filePath)) {
+        results.push({
+          file_name: fileName,
+          status: "unsupported",
+          error: getUnsupportedDocumentReason(filePath),
+        });
+        setImportResults([...results]);
+        continue;
+      }
+
       try {
         const doc = await tauriClient.importPdf(filePath);
         results.push({
@@ -152,6 +163,7 @@ export function WorkbenchPage({
           status: existingIds.has(doc.document_id) ? "duplicate" : "success",
           document: doc,
         });
+        existingIds.add(doc.document_id);
       } catch (error) {
         const errInfo = extractError(error);
         results.push({
@@ -571,7 +583,7 @@ export function WorkbenchPage({
             <div className="action-row workbench-actions">
               <Button
                 variant="primary"
-                onClick={() => void handleImportPdf()}
+                onClick={() => void handleImportDocuments()}
                 disabled={isImporting}
               >
                 {isImporting ? "导入中..." : "选择文件"}

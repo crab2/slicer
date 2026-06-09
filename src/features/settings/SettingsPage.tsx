@@ -8,12 +8,14 @@ import type {
   ApiKeyRecordDto,
   ApiServerStatusDto,
   AppSettingsDto,
+  ModelInfoDto,
   WorkspaceStatusDto,
 } from "../../types/app";
 import { ApiServerSettings } from "./components/ApiServerSettings";
 import { WorkspaceSettings } from "./components/WorkspaceSettings";
 
 const LIBREOFFICE_DOWNLOAD_URL = "https://zh-cn.libreoffice.org/download/libreoffice/";
+const NON_OPENAI_DEFAULT_MODELS = new Set(["MiMo-V2.5", "zai-org/GLM-4.6V"]);
 
 interface SettingsPageProps {
   workspaceStatus: WorkspaceStatusDto;
@@ -29,7 +31,11 @@ export function SettingsPage({
   const [settings, setSettings] = useState<AppSettingsDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<{ message: string; correlationId?: string | null } | null>(null);
+  const [error, setError] = useState<{
+    message: string;
+    details?: string | null;
+    correlationId?: string | null;
+  } | null>(null);
   const [saved, setSaved] = useState(false);
   const [isFindingLibreOffice, setIsFindingLibreOffice] = useState(false);
   const [libreOfficeMessage, setLibreOfficeMessage] = useState<string | null>(null);
@@ -41,6 +47,9 @@ export function SettingsPage({
   const [apiKeyLabelInput, setApiKeyLabelInput] = useState("");
   const [apiKeyList, setApiKeyList] = useState<ApiKeyListDto>({ keys: [] });
   const [isSavingKey, setIsSavingKey] = useState(false);
+  const [openAIModels, setOpenAIModels] = useState<ModelInfoDto[]>([]);
+  const [isFetchingOpenAIModels, setIsFetchingOpenAIModels] = useState(false);
+  const [modelListMessage, setModelListMessage] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -84,6 +93,11 @@ export function SettingsPage({
       window.clearInterval(intervalId);
     };
   }, [workspaceStatus.status, workspaceStatus.workspace_path]);
+
+  useEffect(() => {
+    setOpenAIModels([]);
+    setModelListMessage(null);
+  }, [settings?.model_provider, settings?.base_url, settings?.custom_endpoint]);
 
   function validateBeforeSave(current: AppSettingsDto): string | null {
     if (current.default_image_dpi < 72 || current.default_image_dpi > 300) {
@@ -206,6 +220,34 @@ export function SettingsPage({
     }
   }
 
+  async function handleFetchOpenAIModels() {
+    if (!settings || settings.model_provider !== "openai") return;
+    setIsFetchingOpenAIModels(true);
+    setError(null);
+    setModelListMessage(null);
+    try {
+      const result = await tauriClient.listOpenAIModels({
+        ...settings,
+        model_provider: "openai",
+      });
+      setOpenAIModels(result.models);
+      if (result.models.length === 0) {
+        setModelListMessage("没有获取到可用模型，请检查 Base URL 或 API Key。");
+      } else {
+        setModelListMessage(`已获取 ${result.models.length} 个 OpenAI 模型。`);
+        const currentModel = settings.model_name.trim();
+        const currentModelInList = result.models.some((model) => model.id === currentModel);
+        if (!currentModel || !currentModelInList) {
+          updateField("model_name", result.models[0].id);
+        }
+      }
+    } catch (e) {
+      setError(extractError(e));
+    } finally {
+      setIsFetchingOpenAIModels(false);
+    }
+  }
+
   async function handleOpenLibreOfficeDownload() {
     setError(null);
     try {
@@ -220,6 +262,21 @@ export function SettingsPage({
     value: AppSettingsDto[K],
   ) {
     setSettings((prev) => (prev ? { ...prev, [key]: value } : prev));
+  }
+
+  function handleProviderChange(provider: string) {
+    setOpenAIModels([]);
+    setModelListMessage(null);
+    setSettings((prev) => {
+      if (!prev) return prev;
+      const shouldClearModel =
+        provider === "openai" && NON_OPENAI_DEFAULT_MODELS.has(prev.model_name.trim());
+      return {
+        ...prev,
+        model_provider: provider,
+        model_name: shouldClearModel ? "" : prev.model_name,
+      };
+    });
   }
 
   if (isLoading) {
@@ -245,21 +302,23 @@ export function SettingsPage({
           isLoading={isWorkspaceLoading}
           onChooseWorkspace={onChooseWorkspace}
         />
-        {error ? <ErrorMessage title="设置加载失败" message={error.message} correlationId={error.correlationId} /> : null}
+        {error ? <ErrorMessage title="设置加载失败" message={error.message} details={error.details} correlationId={error.correlationId} /> : null}
       </div>
     );
   }
 
   const currentProvider = settings.model_provider;
+  const isOpenAIProvider = currentProvider === "openai";
   const currentProviderKeys = apiKeyList.keys.filter(
     (item) => item.provider === currentProvider,
   );
   const currentProviderHasActiveKey = currentProviderKeys.some((item) => item.is_active);
+  const canFetchOpenAIModels = isOpenAIProvider && (currentProviderHasActiveKey || settings.api_key_configured);
 
   return (
     <div className="settings-list">
       {error ? (
-        <ErrorMessage title="设置操作失败" message={error.message} correlationId={error.correlationId} />
+        <ErrorMessage title="设置操作失败" message={error.message} details={error.details} correlationId={error.correlationId} />
       ) : null}
 
       <WorkspaceSettings
@@ -329,7 +388,7 @@ export function SettingsPage({
               <span>Provider</span>
               <select
                 value={settings.model_provider}
-                onChange={(e) => updateField("model_provider", e.target.value)}
+                onChange={(e) => handleProviderChange(e.target.value)}
               >
                 <option value="siliconflow">硅基流动 SiliconFlow</option>
                 <option value="mimo">MiMo</option>
@@ -359,13 +418,43 @@ export function SettingsPage({
             </label>
             <label>
               <span>Model Name</span>
-              <input
-                type="text"
-                placeholder="zai-org/GLM-4.6V"
-                value={settings.model_name}
-                onChange={(e) => updateField("model_name", e.target.value)}
-              />
+              <div className="model-name-row">
+                <input
+                  type="text"
+                  list={isOpenAIProvider && openAIModels.length > 0 ? "openai-model-options" : undefined}
+                  placeholder={isOpenAIProvider ? "例如 gpt-5.5" : "zai-org/GLM-4.6V"}
+                  value={settings.model_name}
+                  onChange={(e) => updateField("model_name", e.target.value)}
+                />
+                {isOpenAIProvider ? (
+                  <Button
+                    onClick={() => void handleFetchOpenAIModels()}
+                    disabled={isFetchingOpenAIModels || !canFetchOpenAIModels}
+                    title={
+                      canFetchOpenAIModels
+                        ? "从当前 OpenAI Base URL 获取模型列表"
+                        : "请先为 OpenAI 新增并启用 API Key"
+                    }
+                  >
+                    {isFetchingOpenAIModels ? "获取中" : "获取模型"}
+                  </Button>
+                ) : null}
+              </div>
+              {isOpenAIProvider && openAIModels.length > 0 ? (
+                <datalist id="openai-model-options">
+                  {openAIModels.map((model) => (
+                    <option
+                      key={model.id}
+                      label={model.display_name ?? model.owned_by ?? undefined}
+                      value={model.id}
+                    />
+                  ))}
+                </datalist>
+              ) : null}
             </label>
+            {isOpenAIProvider && modelListMessage ? (
+              <p className="setting-message">{modelListMessage}</p>
+            ) : null}
           </div>
         </div>
         <StatusBadge tone={currentProviderHasActiveKey ? "success" : "warning"}>
@@ -517,12 +606,17 @@ export function SettingsPage({
   );
 }
 
-function extractError(error: unknown): { message: string; correlationId?: string | null } {
+function extractError(error: unknown): {
+  message: string;
+  details?: string | null;
+  correlationId?: string | null;
+} {
   if (typeof error === "object" && error !== null) {
     const e = error as Record<string, unknown>;
     const msg = typeof e.message === "string" ? e.message : null;
+    const details = typeof e.details === "string" ? e.details : null;
     const cid = typeof e.correlation_id === "string" ? e.correlation_id : null;
-    if (msg) return { message: msg, correlationId: cid };
+    if (msg) return { message: msg, details, correlationId: cid };
   }
   if (error instanceof Error) return { message: error.message };
   if (typeof error === "string") return { message: error };

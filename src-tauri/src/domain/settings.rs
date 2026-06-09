@@ -40,6 +40,19 @@ pub struct ModelConfigurationStatusDto {
     pub requires_privacy_notice: bool,
 }
 
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ModelInfoDto {
+    pub id: String,
+    pub display_name: Option<String>,
+    pub owned_by: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
+pub struct ModelListDto {
+    pub provider: String,
+    pub models: Vec<ModelInfoDto>,
+}
+
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct PrivacyNoticeStatusDto {
     pub accepted: bool,

@@ -18,7 +18,7 @@ use commands::api_commands::{get_api_server_status, reset_api_token};
 use commands::diagnostics_commands::record_diagnostic_error;
 use commands::export_commands::export_media;
 use commands::import_commands::{
-    delete_document, import_pdf, list_documents, list_pages, retry_import,
+    delete_document, import_image, import_pdf, list_documents, list_pages, retry_import,
 };
 use commands::job_commands::{
     create_job, create_placeholder_job, fail_job, get_core_status_catalog, list_jobs,
@@ -30,8 +30,8 @@ use commands::search_commands::{
 use commands::settings_commands::{
     accept_privacy_notice, activate_api_key, add_api_key, delete_api_key, delete_api_key_record,
     delete_provider_api_key, find_libreoffice_path, get_app_settings,
-    get_model_configuration_status, get_privacy_notice_status, list_api_keys, save_api_key,
-    save_app_settings, save_provider_api_key,
+    get_model_configuration_status, get_privacy_notice_status, list_api_keys, list_openai_models,
+    save_api_key, save_app_settings, save_provider_api_key,
 };
 use commands::workspace_commands::{get_workspace_status, select_workspace};
 use services::api_server_service::ApiServerService;
@@ -96,6 +96,7 @@ pub fn run() {
             delete_api_key,
             delete_provider_api_key,
             get_model_configuration_status,
+            list_openai_models,
             get_privacy_notice_status,
             accept_privacy_notice,
             get_core_status_catalog,
@@ -112,6 +113,7 @@ pub fn run() {
             reanalyze_document,
             reanalyze_failed_pages,
             list_workbench_pages,
+            import_image,
             import_pdf,
             retry_import,
             delete_document,

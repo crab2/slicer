@@ -1,8 +1,10 @@
 use crate::domain::settings::{
-    ApiKeyListDto, AppSettingsDto, ModelConfigurationStatusDto, PrivacyNoticeStatusDto,
+    ApiKeyListDto, AppSettingsDto, ModelConfigurationStatusDto, ModelListDto,
+    PrivacyNoticeStatusDto,
 };
 use crate::errors::AppError;
 use crate::providers::libreoffice_converter;
+use crate::providers::model::openai_provider::OpenAIProvider;
 use crate::services::api_server_service::ApiServerService;
 use crate::services::settings_service::SettingsService;
 use crate::services::workspace_service::WorkspaceService;
@@ -83,6 +85,37 @@ pub fn get_model_configuration_status(
     workspace: State<'_, WorkspaceService>,
 ) -> Result<ModelConfigurationStatusDto, AppError> {
     SettingsService::get_model_configuration_status(&workspace)
+}
+
+#[tauri::command]
+pub async fn list_openai_models(
+    settings: AppSettingsDto,
+    workspace: State<'_, WorkspaceService>,
+) -> Result<ModelListDto, AppError> {
+    let workspace = workspace.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let api_key =
+            SettingsService::read_active_api_key_for_provider_from_workspace(&workspace, "openai")?
+                .ok_or_else(|| {
+                    AppError::new(
+                        "api_key_missing",
+                        "请先为 OpenAI 配置并启用 API Key。",
+                        "settings",
+                        true,
+                    )
+                })?;
+        OpenAIProvider::list_models_with_api_key(&settings, &api_key)
+    })
+    .await
+    .map_err(|e| {
+        AppError::new(
+            "model_list_task_failed",
+            "获取 OpenAI 模型列表任务执行失败。",
+            "settings",
+            true,
+        )
+        .with_details(e.to_string())
+    })?
 }
 
 #[tauri::command]

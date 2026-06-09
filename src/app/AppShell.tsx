@@ -4,6 +4,7 @@ import { ErrorMessage } from "../components/common/ErrorMessage";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { AnalysisPage } from "../features/analysis/AnalysisPage";
 import { ExportPage } from "../features/export/ExportPage";
+import { ImageImportPage } from "../features/image-import/ImageImportPage";
 import { IndexPage } from "../features/index/IndexPage";
 import { SearchPage } from "../features/search/SearchPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
@@ -14,6 +15,7 @@ import { navigationItems, type ViewId } from "./navigation";
 
 const pageTitles: Record<ViewId, string> = {
   workbench: "工作台",
+  imageImport: "图片导入",
   analysis: "模型分析",
   export: "一键导出",
   index: "BM25 索引",
@@ -123,6 +125,15 @@ export function AppShell() {
               isActive={activeView === "workbench"}
               onChooseWorkspace={handleChooseWorkspace}
               onOpenSettings={() => setActiveView("settings")}
+            />
+          </div>
+
+          <div hidden={activeView !== "imageImport"}>
+            <ImageImportPage
+              workspaceStatus={workspaceStatus}
+              isWorkspaceLoading={isWorkspaceLoading}
+              isActive={activeView === "imageImport"}
+              onChooseWorkspace={handleChooseWorkspace}
             />
           </div>
 

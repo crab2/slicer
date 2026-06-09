@@ -222,6 +222,37 @@ impl SettingsService {
         security::read_api_key_for_provider(&provider)
     }
 
+    pub fn read_active_api_key_for_provider_from_workspace(
+        workspace: &WorkspaceService,
+        provider: &str,
+    ) -> AppResult<Option<String>> {
+        let provider = Self::normalized_provider_name(provider);
+        Self::validate_provider_name(&provider)?;
+
+        if let Some(active) = Self::migrated_api_key_list(workspace)?
+            .keys
+            .into_iter()
+            .find(|item| item.provider == provider && item.is_active)
+        {
+            let Some(secret) = security::read_api_key_for_id(&active.key_id)? else {
+                return Err(AppError::new(
+                    "api_key_secret_missing",
+                    "当前启用的 API Key 密钥内容缺失，请删除后重新新增。",
+                    "settings",
+                    true,
+                )
+                .with_details(format!(
+                    "provider={}; key_id={}",
+                    provider, active.key_id
+                )));
+            };
+            security::store_api_key_for_provider(&provider, &secret)?;
+            return Ok(Some(secret));
+        }
+
+        security::read_api_key_for_provider(&provider)
+    }
+
     pub fn get_libreoffice_path(workspace: &WorkspaceService) -> AppResult<String> {
         let settings = workspace.settings_repository().load_app_settings()?;
         settings.libreoffice_path.ok_or_else(|| {
@@ -373,9 +404,17 @@ impl SettingsService {
             .into_iter()
             .find(|item| item.provider == provider && item.is_active)
         {
-            return Ok(security::read_api_key_for_id(&active.key_id)?.is_some());
+            return match security::read_api_key_for_id(&active.key_id) {
+                Ok(secret) => Ok(secret.is_some()),
+                Err(err) if err.code == "api_key_looks_like_url" => Ok(false),
+                Err(err) => Err(err),
+            };
         }
-        Ok(security::read_api_key_for_provider(&provider)?.is_some())
+        match security::read_api_key_for_provider(&provider) {
+            Ok(secret) => Ok(secret.is_some()),
+            Err(err) if err.code == "api_key_looks_like_url" => Ok(false),
+            Err(err) => Err(err),
+        }
     }
 
     fn migrated_api_key_list(workspace: &WorkspaceService) -> AppResult<ApiKeyListDto> {
@@ -694,6 +733,32 @@ mod tests {
         settings.api_key_configured = true;
         let missing = SettingsService::missing_configuration_fields(&settings);
         assert!(missing.contains(&"model_provider".to_string()));
+    }
+
+    #[test]
+    fn workspace_active_api_key_read_normalizes_bearer_prefix() {
+        let (service, root) = test_workspace();
+        let keys = SettingsService::add_api_key(
+            &service,
+            "openai",
+            "test openai",
+            "Authorization: Bearer sk-test-openai",
+            true,
+        )
+        .expect("add key");
+        assert!(keys
+            .keys
+            .iter()
+            .any(|key| key.provider == "openai" && key.is_active));
+
+        let secret =
+            SettingsService::read_active_api_key_for_provider_from_workspace(&service, "openai")
+                .expect("read active")
+                .expect("secret");
+
+        assert_eq!(secret, "sk-test-openai");
+
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
