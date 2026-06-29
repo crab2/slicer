@@ -3,18 +3,216 @@ use crate::domain::document::DocumentDto;
 use crate::errors::{AppError, AppResult};
 use crate::jobs::job_orchestrator::JobOrchestrator;
 use crate::providers::converter::{detect_file_type, is_office_extension, DocumentConverter};
-use crate::providers::pdf_renderer::{compute_file_hash, sanitize_filename, PdfRenderer};
+use crate::providers::pdf_renderer::{
+    compute_file_hash, compute_image_hash, sanitize_filename, PdfRenderer,
+};
 use crate::repositories::db::block_on_db;
 use crate::repositories::document_repository::DocumentRepository;
 use crate::services::workspace_service::WorkspaceService;
+use image::ImageFormat;
 use std::collections::HashSet;
 use std::fs;
-use std::io::ErrorKind;
+use std::io::{Cursor, ErrorKind};
 use std::path::{Path, PathBuf};
 
 pub struct ImportService;
 
 impl ImportService {
+    pub fn is_image_extension(ext: &str) -> bool {
+        matches!(ext.to_ascii_lowercase().as_str(), "png" | "jpg" | "jpeg")
+    }
+
+    pub fn import_image(
+        workspace: &WorkspaceService,
+        image_path: &PathBuf,
+    ) -> AppResult<DocumentDto> {
+        let status = workspace.get_workspace_status();
+        if status.status != "ready" {
+            return Err(AppError::new(
+                "workspace_not_ready",
+                "工作区未就绪，请先选择工作区。",
+                "import",
+                true,
+            ));
+        }
+
+        if !image_path.exists() {
+            return Err(AppError::new(
+                "file_not_found",
+                "找不到指定的图片文件。",
+                "import",
+                false,
+            ));
+        }
+
+        if !image_path.is_file() {
+            return Err(AppError::new(
+                "file_not_found",
+                "选择的图片路径不是文件。",
+                "import",
+                false,
+            ));
+        }
+
+        let ext = image_path
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("")
+            .to_lowercase();
+        if !Self::is_image_extension(&ext) {
+            return Err(AppError::new(
+                "unsupported_file_type",
+                format!("不支持的图片类型: .{ext}，当前支持 PNG、JPG、JPEG。"),
+                "import",
+                false,
+            ));
+        }
+
+        let layout = workspace.workspace_layout()?;
+        let originals_dir = layout.originals_dir();
+        let pages_dir = layout.pages_dir();
+        let tmp_dir = layout.tmp_dir();
+
+        let original_name = image_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown-image")
+            .to_string();
+
+        let file_hash = compute_file_hash(image_path)?;
+        let sanitized = sanitize_filename(&original_name);
+
+        let mut conn = workspace.get_db_connection()?;
+
+        if let Some(existing) = DocumentRepository::find_document_by_hash(&mut conn, &file_hash)? {
+            return Ok(existing);
+        }
+
+        let orchestrator = JobOrchestrator::new(layout.clone());
+        let job = orchestrator.create_job("image_import")?;
+        let job_id = &job.job_id;
+
+        let dest_filename = format!("{}_{}", &file_hash[..16], sanitized);
+        let dest_path = originals_dir.join(&dest_filename);
+        let document = DocumentRepository::create_document(
+            &mut conn,
+            &original_name,
+            &ext,
+            &file_hash,
+            &dest_path.to_string_lossy(),
+            Some(job_id),
+        )?;
+
+        Self::copy_original_file(image_path, &dest_path).map_err(|e| {
+            Self::fail_with_cleanup(
+                workspace,
+                &document.document_id,
+                job_id,
+                "file_copy_failed",
+                "无法复制原图片到工作区。",
+                &e.to_string(),
+            )
+        })?;
+
+        orchestrator.update_progress(job_id, 40, Some("正在处理图片"))?;
+
+        let png_bytes = Self::decode_image_to_png(image_path).map_err(|e| {
+            Self::fail_with_cleanup(
+                workspace,
+                &document.document_id,
+                job_id,
+                &e.code,
+                &e.message,
+                e.details.as_deref().unwrap_or(""),
+            )
+        })?;
+
+        let image_hash = compute_image_hash(&png_bytes);
+        let doc_pages_dir = pages_dir.join(&document.document_id);
+        fs::create_dir_all(&doc_pages_dir).map_err(|e| {
+            Self::fail_with_cleanup(
+                workspace,
+                &document.document_id,
+                job_id,
+                "pages_dir_create_failed",
+                "无法创建页面目录。",
+                &e.to_string(),
+            )
+        })?;
+
+        let mut new_files = HashSet::new();
+        let existing = DocumentRepository::find_image_asset_by_hash(&mut conn, &image_hash)?;
+        if existing.is_some() {
+            DocumentRepository::create_page_record(
+                &mut conn,
+                &document.document_id,
+                1,
+                &image_hash,
+            )?;
+        } else {
+            let png_filename = format!("{image_hash}.png");
+            let tmp_path = tmp_dir.join(format!("{}_{}", document.document_id, png_filename));
+            let final_path = doc_pages_dir.join(&png_filename);
+
+            fs::write(&tmp_path, &png_bytes).map_err(|e| {
+                Self::fail_with_cleanup_safe(
+                    workspace,
+                    &document.document_id,
+                    job_id,
+                    "page_write_failed",
+                    "页面图片写入失败。",
+                    &e.to_string(),
+                    &new_files,
+                )
+            })?;
+
+            fs::rename(&tmp_path, &final_path).map_err(|e| {
+                Self::fail_with_cleanup_safe(
+                    workspace,
+                    &document.document_id,
+                    job_id,
+                    "page_rename_failed",
+                    "页面图片原子写入失败。",
+                    &e.to_string(),
+                    &new_files,
+                )
+            })?;
+
+            new_files.insert(final_path);
+
+            let file_size = png_bytes.len() as i64;
+            let rel_path = format!("pages/{}/{}.png", document.document_id, image_hash);
+            DocumentRepository::create_image_asset(&mut conn, &image_hash, &rel_path, file_size)?;
+            DocumentRepository::create_page_record(
+                &mut conn,
+                &document.document_id,
+                1,
+                &image_hash,
+            )?;
+        }
+
+        DocumentRepository::update_document_status(
+            &mut conn,
+            &document.document_id,
+            "ready",
+            Some(1),
+            None,
+        )?;
+
+        orchestrator.update_progress(job_id, 100, Some("导入完成"))?;
+
+        if let Err(e) = ArtifactExporter::export_all(workspace) {
+            eprintln!("[WARN] JSONL 导出失败，不影响导入结果: {}", e);
+        }
+
+        let updated = DocumentRepository::list_documents(&mut conn)?
+            .into_iter()
+            .find(|d| d.document_id == document.document_id)
+            .unwrap_or(document);
+
+        Ok(updated)
+    }
+
     pub fn import_pdf(
         workspace: &WorkspaceService,
         pdf_path: &PathBuf,
@@ -74,7 +272,7 @@ impl ImportService {
             Some(job_id),
         )?;
 
-        fs::copy(pdf_path, &dest_path).map_err(|e| {
+        Self::copy_original_file(pdf_path, &dest_path).map_err(|e| {
             Self::fail_with_cleanup(
                 workspace,
                 &document.document_id,
@@ -249,10 +447,14 @@ impl ImportService {
             return Self::import_pdf(workspace, file_path, renderer);
         }
 
+        if Self::is_image_extension(&ext) {
+            return Self::import_image(workspace, file_path);
+        }
+
         if !is_office_extension(&ext) {
             return Err(AppError::new(
                 "unsupported_file_type",
-                format!("不支持的文件类型: .{ext}，当前支持 PDF、DOC、DOCX、PPT、PPTX。"),
+                format!("不支持的文件类型: .{ext}，当前支持 PDF、DOC、DOCX、PPT、PPTX、PNG、JPG、JPEG。"),
                 "import",
                 false,
             ));
@@ -312,7 +514,7 @@ impl ImportService {
             Some(job_id),
         )?;
 
-        fs::copy(file_path, &dest_path).map_err(|e| {
+        Self::copy_original_file(file_path, &dest_path).map_err(|e| {
             Self::fail_with_cleanup(
                 workspace,
                 &document.document_id,
@@ -565,6 +767,8 @@ impl ImportService {
         if ext == "pdf" {
             let renderer = crate::providers::pdf_renderer::PdfiumRenderer;
             Self::import_pdf(workspace, &original_path, &renderer)
+        } else if Self::is_image_extension(&ext) {
+            Self::import_image(workspace, &original_path)
         } else if is_office_extension(&ext) {
             let renderer = crate::providers::pdf_renderer::PdfiumRenderer;
             let lo_path = crate::services::settings_service::SettingsService::get_libreoffice_path(
@@ -643,6 +847,17 @@ impl ImportService {
         Ok(())
     }
 
+    fn copy_original_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+        if destination.exists() {
+            let source_canonical = fs::canonicalize(source)?;
+            let destination_canonical = fs::canonicalize(destination)?;
+            if source_canonical == destination_canonical {
+                return Ok(());
+            }
+        }
+        fs::copy(source, destination).map(|_| ())
+    }
+
     fn fail_with_cleanup(
         workspace: &WorkspaceService,
         document_id: &str,
@@ -705,5 +920,241 @@ impl ImportService {
         }
 
         AppError::new(code, message, "import", true).with_details(details.to_string())
+    }
+
+    fn decode_image_to_png(image_path: &Path) -> AppResult<Vec<u8>> {
+        let reader = image::ImageReader::open(image_path).map_err(|e| {
+            AppError::new("image_read_failed", "无法读取图片文件。", "import", true)
+                .with_details(e.to_string())
+        })?;
+        let reader = reader.with_guessed_format().map_err(|e| {
+            AppError::new(
+                "image_format_detect_failed",
+                "无法识别图片格式。",
+                "import",
+                false,
+            )
+            .with_details(e.to_string())
+        })?;
+        let image = reader.decode().map_err(|e| {
+            AppError::new(
+                "image_decode_failed",
+                "图片解码失败，文件可能已损坏或格式不受支持。",
+                "import",
+                false,
+            )
+            .with_details(e.to_string())
+        })?;
+
+        let mut png_bytes = Vec::new();
+        let mut cursor = Cursor::new(&mut png_bytes);
+        image.write_to(&mut cursor, ImageFormat::Png).map_err(|e| {
+            AppError::new(
+                "image_png_encode_failed",
+                "图片转换为 PNG 失败。",
+                "import",
+                false,
+            )
+            .with_details(e.to_string())
+        })?;
+        Ok(png_bytes)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ImportService;
+    use crate::api::state::ApiAppState;
+    use crate::repositories::document_repository::DocumentRepository;
+    use crate::services::api_server_service::ApiServerService;
+    use crate::services::workspace_service::WorkspaceService;
+    use image::{ImageFormat, Rgb, RgbImage};
+    use std::fs;
+    use std::io::Cursor;
+    use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+    use uuid::Uuid;
+
+    fn test_workspace(label: &str) -> (WorkspaceService, PathBuf, PathBuf) {
+        let base = std::env::temp_dir().join(format!(
+            "slicer-import-image-{label}-{}-{}",
+            std::process::id(),
+            Uuid::new_v4()
+        ));
+        let config = base.join("config");
+        let workspace_dir = base.join("workspace");
+        let service = WorkspaceService::new(config.clone());
+        let api_state = ApiAppState::new(Arc::new(service.clone()));
+        let api = ApiServerService::new(api_state);
+        let selected = service.select_workspace(workspace_dir.to_string_lossy().into_owned(), &api);
+        assert_eq!(selected.status, "ready");
+        (service, base, workspace_dir)
+    }
+
+    fn test_image() -> RgbImage {
+        RgbImage::from_pixel(3, 2, Rgb([180, 45, 90]))
+    }
+
+    fn write_png(path: &Path) {
+        write_image(path, ImageFormat::Png);
+    }
+
+    fn write_jpeg(path: &Path) {
+        write_image(path, ImageFormat::Jpeg);
+    }
+
+    fn write_blue_jpeg(path: &Path) {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(RgbImage::from_pixel(3, 2, Rgb([30, 80, 210])))
+            .write_to(&mut Cursor::new(&mut bytes), ImageFormat::Jpeg)
+            .expect("encode blue jpeg");
+        fs::write(path, bytes).expect("write blue jpeg");
+    }
+
+    fn write_image(path: &Path, format: ImageFormat) {
+        let mut bytes = Vec::new();
+        image::DynamicImage::ImageRgb8(test_image())
+            .write_to(&mut Cursor::new(&mut bytes), format)
+            .expect("encode image");
+        fs::write(path, bytes).expect("write image");
+    }
+
+    #[test]
+    fn import_image_creates_single_page_document_and_asset() {
+        let (service, base, workspace_dir) = test_workspace("single");
+        let source = base.join("source.png");
+        write_png(&source);
+
+        let document = ImportService::import_image(&service, &source).expect("import image");
+
+        assert_eq!(document.original_filename, "source.png");
+        assert_eq!(document.file_type, "png");
+        assert_eq!(document.status, "ready");
+        assert_eq!(document.page_count, Some(1));
+        assert!(PathBuf::from(&document.original_path).is_file());
+
+        let mut conn = service.get_db_connection().expect("db");
+        let pages = DocumentRepository::list_pages_by_document(&mut conn, &document.document_id)
+            .expect("pages");
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].page_number, 1);
+        assert_eq!(pages[0].status, "rendered");
+
+        let asset = DocumentRepository::find_image_asset_by_hash(&mut conn, &pages[0].image_hash)
+            .expect("asset query")
+            .expect("asset");
+        assert!(asset.file_path.starts_with("pages/"));
+        assert!(workspace_dir.join(&asset.file_path).is_file());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn import_image_returns_existing_document_for_same_file_hash() {
+        let (service, base, _) = test_workspace("duplicate");
+        let source = base.join("duplicate.png");
+        write_png(&source);
+
+        let first = ImportService::import_image(&service, &source).expect("first import");
+        let second = ImportService::import_image(&service, &source).expect("second import");
+
+        assert_eq!(first.document_id, second.document_id);
+
+        let mut conn = service.get_db_connection().expect("db");
+        let documents = DocumentRepository::list_documents(&mut conn).expect("documents");
+        assert_eq!(documents.len(), 1);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn import_image_accepts_jpg_and_jpeg_extensions() {
+        let (service, base, _) = test_workspace("jpeg");
+        let jpg_source = base.join("source.jpg");
+        let jpeg_source = base.join("source-copy.jpeg");
+        write_jpeg(&jpg_source);
+        write_blue_jpeg(&jpeg_source);
+
+        let jpg_doc = ImportService::import_image(&service, &jpg_source).expect("jpg import");
+        let jpeg_doc = ImportService::import_image(&service, &jpeg_source).expect("jpeg import");
+
+        assert_eq!(jpg_doc.file_type, "jpg");
+        assert_eq!(jpg_doc.page_count, Some(1));
+        assert_eq!(jpeg_doc.file_type, "jpeg");
+        assert_eq!(jpeg_doc.page_count, Some(1));
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn deleting_first_document_preserves_shared_image_for_second_document() {
+        let (service, base, workspace_dir) = test_workspace("shared-delete");
+        let first_source = base.join("first.png");
+        let second_source = base.join("second.jpg");
+        write_png(&first_source);
+        write_jpeg(&second_source);
+
+        let first_doc = ImportService::import_image(&service, &first_source).expect("first import");
+        let second_doc =
+            ImportService::import_image(&service, &second_source).expect("second import");
+
+        assert_ne!(first_doc.document_id, second_doc.document_id);
+
+        let mut conn = service.get_db_connection().expect("db");
+        let second_page =
+            DocumentRepository::list_pages_by_document(&mut conn, &second_doc.document_id)
+                .expect("second pages")
+                .pop()
+                .expect("second page");
+        let asset_before =
+            DocumentRepository::find_image_asset_by_hash(&mut conn, &second_page.image_hash)
+                .expect("asset before")
+                .expect("asset before");
+        drop(conn);
+
+        ImportService::delete_document(&service, &first_doc.document_id).expect("delete first");
+
+        let mut conn = service.get_db_connection().expect("db");
+        let asset_after =
+            DocumentRepository::find_image_asset_by_hash(&mut conn, &second_page.image_hash)
+                .expect("asset after")
+                .expect("asset after");
+        assert_eq!(asset_after.file_path, asset_before.file_path);
+        assert!(workspace_dir.join(&asset_after.file_path).is_file());
+
+        ImportService::delete_document(&service, &second_doc.document_id).expect("delete second");
+        assert!(!workspace_dir.join(&asset_after.file_path).exists());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn copying_original_to_itself_is_a_noop_for_workspace_retry() {
+        let (service, base, _) = test_workspace("same-copy");
+        let source = base.join("source.png");
+        write_png(&source);
+        let document = ImportService::import_image(&service, &source).expect("import image");
+        let original_path = PathBuf::from(&document.original_path);
+        let before = fs::metadata(&original_path).expect("metadata before").len();
+
+        ImportService::copy_original_file(&original_path, &original_path).expect("same file copy");
+
+        let after = fs::metadata(&original_path).expect("metadata after").len();
+        assert_eq!(after, before);
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn import_image_rejects_corrupt_supported_extension() {
+        let (service, base, _) = test_workspace("corrupt");
+        let source = base.join("broken.png");
+        fs::write(&source, b"not a png").expect("write corrupt image");
+
+        let error = ImportService::import_image(&service, &source).expect_err("corrupt image");
+
+        assert_eq!(error.code, "image_decode_failed");
+
+        let _ = fs::remove_dir_all(base);
     }
 }

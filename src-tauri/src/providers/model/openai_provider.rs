@@ -1,10 +1,13 @@
 use crate::domain::settings::AppSettingsDto;
+use crate::domain::settings::{ModelInfoDto, ModelListDto};
 use crate::errors::{AppError, AppResult};
 use crate::providers::model::provider::{
     ModelAnalysisRequest, ModelAnalysisResponse, ModelProvider,
 };
 use crate::services::settings_service::SettingsService;
 use base64::Engine;
+use reqwest::header::{ACCEPT, CONTENT_TYPE};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::Read;
 use std::time::Duration;
@@ -64,6 +67,84 @@ impl OpenAIProvider {
                 "type": "json_object"
             }
         })
+    }
+
+    pub fn models_endpoint(settings: &AppSettingsDto) -> AppResult<String> {
+        let base_url = settings.base_url.trim().trim_end_matches('/');
+        let custom_endpoint = settings.custom_endpoint.trim();
+
+        if custom_endpoint.starts_with("http://") || custom_endpoint.starts_with("https://") {
+            return validate_endpoint(&default_models_endpoint(
+                custom_endpoint.trim_end_matches('/'),
+            ));
+        }
+
+        if base_url.is_empty() {
+            return Ok("https://api.openai.com/v1/models".to_string());
+        }
+
+        if custom_endpoint.is_empty() {
+            validate_endpoint(&default_models_endpoint(base_url))
+        } else {
+            validate_endpoint(&default_models_endpoint(&format!(
+                "{base_url}/{}",
+                custom_endpoint.trim_start_matches('/')
+            )))
+        }
+    }
+
+    pub fn list_models_with_api_key(
+        settings: &AppSettingsDto,
+        api_key: &str,
+    ) -> AppResult<ModelListDto> {
+        let endpoint = Self::models_endpoint(settings)?;
+        let client = reqwest::blocking::Client::builder()
+            .connect_timeout(CONNECT_TIMEOUT)
+            .timeout(Duration::from_secs(30))
+            .build()
+            .map_err(|_| provider_error("model_client_build_failed", true, "client_build_failed"))?;
+
+        let mut response = client
+            .get(endpoint)
+            .bearer_auth(api_key)
+            .header(ACCEPT, "application/json")
+            .header(CONTENT_TYPE, "application/json")
+            .send()
+            .map_err(|_| provider_error("model_list_request_failed", true, "request_failed"))?;
+
+        let status = response.status();
+        if let Some(content_length) = response.content_length() {
+            if content_length > MAX_PROVIDER_RESPONSE_BYTES {
+                return Err(provider_error(
+                    "model_response_too_large",
+                    true,
+                    "content_length_exceeded",
+                ));
+            }
+        }
+        let response_text = read_limited_response(&mut response)?;
+
+        if !status.is_success() {
+            let error_preview = response_preview(&response_text);
+            let status_code = status.as_u16();
+            let key_fingerprint = api_key_fingerprint(api_key);
+            return Err(AppError::new(
+                "model_list_http_status_failed",
+                format!("OpenAI 模型列表返回非成功状态（HTTP {status_code}）。"),
+                "settings",
+                true,
+            )
+            .with_details(format!(
+                "status={}; response_bytes={}; response_preview={}; key_fingerprint={}; endpoint={}; endpoint_kind=openai_models",
+                status_code,
+                response_text.len(),
+                error_preview,
+                key_fingerprint,
+                Self::models_endpoint(settings)?
+            )));
+        }
+
+        parse_model_list_response(&response_text)
     }
 }
 
@@ -216,6 +297,81 @@ fn read_limited_response(response: &mut reqwest::blocking::Response) -> AppResul
     })
 }
 
+fn default_models_endpoint(base_url: &str) -> String {
+    let lower = base_url.to_ascii_lowercase();
+    if lower.ends_with("/models") {
+        base_url.to_string()
+    } else if lower.ends_with("/chat/completions") {
+        let suffix_len = "/chat/completions".len();
+        format!("{}{}", &base_url[..base_url.len() - suffix_len], "/models")
+    } else if lower.ends_with("/v1") {
+        format!("{base_url}/models")
+    } else {
+        format!("{base_url}/v1/models")
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIModelListResponse {
+    data: Vec<OpenAIModelRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenAIModelRecord {
+    id: String,
+    display_name: Option<String>,
+    owned_by: Option<String>,
+}
+
+fn parse_model_list_response(response_text: &str) -> AppResult<ModelListDto> {
+    let parsed: OpenAIModelListResponse = serde_json::from_str(response_text).map_err(|err| {
+        AppError::new(
+            "model_list_response_json_invalid",
+            "OpenAI 模型列表响应不是可解析 JSON。",
+            "settings",
+            true,
+        )
+        .with_details(format!(
+            "summary=json parse failed at line {} column {}; response_bytes={}; endpoint_kind=openai_models",
+            err.line(),
+            err.column(),
+            response_text.len()
+        ))
+    })?;
+
+    let mut models: Vec<ModelInfoDto> = parsed
+        .data
+        .into_iter()
+        .filter(|model| !model.id.trim().is_empty())
+        .map(|model| ModelInfoDto {
+            id: model.id,
+            display_name: model.display_name,
+            owned_by: model.owned_by,
+        })
+        .collect();
+    models.sort_by(|a, b| a.id.cmp(&b.id));
+    models.dedup_by(|a, b| a.id == b.id);
+
+    Ok(ModelListDto {
+        provider: "openai".to_string(),
+        models,
+    })
+}
+
+fn response_preview(response_text: &str) -> String {
+    response_text.chars().take(500).collect()
+}
+
+fn api_key_fingerprint(key: &str) -> String {
+    let chars: Vec<char> = key.chars().collect();
+    if chars.len() <= 8 {
+        return format!("len={}", chars.len());
+    }
+    let prefix: String = chars.iter().take(4).collect();
+    let suffix: String = chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    format!("len={}; prefix={prefix}; suffix={suffix}", chars.len())
+}
+
 fn extract_openai_content(response_text: &str) -> AppResult<String> {
     let parsed: Value = serde_json::from_str(response_text).map_err(|err| {
         let preview = if response_text.len() > 500 {
@@ -277,7 +433,10 @@ fn provider_error(code: &str, retryable: bool, summary: &str) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{extract_openai_content, OpenAIProvider, MAX_COMPLETION_TOKENS};
+    use super::{
+        api_key_fingerprint, extract_openai_content, parse_model_list_response, OpenAIProvider,
+        MAX_COMPLETION_TOKENS,
+    };
     use crate::domain::settings::AppSettingsDto;
     use crate::providers::model::provider::ModelAnalysisRequest;
     use crate::providers::model::schema_validator::ExpectedPageContext;
@@ -312,6 +471,51 @@ mod tests {
     }
 
     #[test]
+    fn combines_base_url_for_models_endpoint() {
+        let mut settings = AppSettingsDto::default();
+        settings.base_url = "https://custom.openai.azure.com".to_string();
+        assert_eq!(
+            OpenAIProvider::models_endpoint(&settings).expect("models endpoint"),
+            "https://custom.openai.azure.com/v1/models"
+        );
+
+        settings.base_url = "https://proxy.example.com/v1".to_string();
+        assert_eq!(
+            OpenAIProvider::models_endpoint(&settings).expect("models endpoint"),
+            "https://proxy.example.com/v1/models"
+        );
+
+        settings.base_url = "https://www.su8.codes/codex/v1".to_string();
+        assert_eq!(
+            OpenAIProvider::models_endpoint(&settings).expect("models endpoint"),
+            "https://www.su8.codes/codex/v1/models"
+        );
+    }
+
+    #[test]
+    fn custom_chat_endpoint_preserves_proxy_prefix_for_models_endpoint() {
+        let mut settings = AppSettingsDto::default();
+        settings.custom_endpoint = "https://proxy.example.com/codex/v1/chat/completions".to_string();
+
+        assert_eq!(
+            OpenAIProvider::models_endpoint(&settings).expect("models endpoint"),
+            "https://proxy.example.com/codex/v1/models"
+        );
+    }
+
+    #[test]
+    fn relative_custom_chat_endpoint_preserves_proxy_prefix_for_models_endpoint() {
+        let mut settings = AppSettingsDto::default();
+        settings.base_url = "https://www.su8.codes".to_string();
+        settings.custom_endpoint = "/codex/v1/chat/completions".to_string();
+
+        assert_eq!(
+            OpenAIProvider::models_endpoint(&settings).expect("models endpoint"),
+            "https://www.su8.codes/codex/v1/models"
+        );
+    }
+
+    #[test]
     fn openai_request_body_uses_standard_chat_completions_shape() {
         let request = ModelAnalysisRequest {
             image_bytes: Vec::new(),
@@ -342,6 +546,33 @@ mod tests {
             extract_openai_content(raw).expect("content"),
             r#"{"schema_version":"page_analysis_v1"}"#
         );
+    }
+
+    #[test]
+    fn parses_and_sorts_model_list_response() {
+        let raw = r#"{
+            "object": "list",
+            "data": [
+                {"id": "gpt-5.5", "object": "model", "display_name": "GPT-5.5", "owned_by": "openai"},
+                {"id": "gpt-4.1-mini", "object": "model", "display_name": "GPT-4.1 Mini", "owned_by": "openai"},
+                {"id": "gpt-5.5", "object": "model", "owned_by": "openai"}
+            ]
+        }"#;
+
+        let list = parse_model_list_response(raw).expect("model list");
+
+        assert_eq!(list.provider, "openai");
+        assert_eq!(
+            list.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            vec!["gpt-4.1-mini", "gpt-5.5"]
+        );
+        assert_eq!(list.models[0].display_name.as_deref(), Some("GPT-4.1 Mini"));
+    }
+
+    #[test]
+    fn api_key_fingerprint_does_not_expose_full_secret() {
+        assert_eq!(api_key_fingerprint("sk-1234567890abcd"), "len=17; prefix=sk-1; suffix=abcd");
+        assert_eq!(api_key_fingerprint("short"), "len=5");
     }
 
     #[test]

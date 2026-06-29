@@ -1,0 +1,1396 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>slicer UX Design Directions</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f7f8;
+      --surface: #ffffff;
+      --surface-2: #f0f2f4;
+      --surface-3: #e7e9ec;
+      --text: #17191c;
+      --muted: #626973;
+      --soft: #89919b;
+      --line: #d8dce1;
+      --line-strong: #c7ccd2;
+      --accent: #3f6f9f;
+      --accent-weak: #e8f1fa;
+      --success: #2f7d55;
+      --success-weak: #e7f4ec;
+      --warn: #a26b1a;
+      --warn-weak: #fff3dd;
+      --danger: #b54545;
+      --danger-weak: #faeaea;
+      --shadow: 0 12px 30px rgba(21, 27, 34, 0.08);
+      --radius: 8px;
+      --radius-sm: 6px;
+      --font: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+      --mono: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+    }
+
+    [data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #101214;
+      --surface: #171a1e;
+      --surface-2: #20242a;
+      --surface-3: #2a3037;
+      --text: #eef1f4;
+      --muted: #a5adb7;
+      --soft: #78818d;
+      --line: #303640;
+      --line-strong: #414956;
+      --accent: #8ab4df;
+      --accent-weak: #1b3147;
+      --success: #78c69a;
+      --success-weak: #1d3a2a;
+      --warn: #e0b263;
+      --warn-weak: #47361e;
+      --danger: #ee8f8f;
+      --danger-weak: #4b2426;
+      --shadow: 0 16px 36px rgba(0, 0, 0, 0.3);
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.45), transparent 260px),
+        var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      letter-spacing: 0;
+    }
+
+    [data-theme="dark"] body {
+      background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent 260px),
+        var(--bg);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    .shell {
+      display: grid;
+      grid-template-columns: 280px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+
+    .rail {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      padding: 20px 16px;
+      border-right: 1px solid var(--line);
+      background: color-mix(in srgb, var(--surface) 86%, transparent);
+      backdrop-filter: blur(18px);
+      overflow: auto;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 22px;
+    }
+
+    .mark {
+      display: grid;
+      place-items: center;
+      width: 32px;
+      height: 32px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    .brand h1 {
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.2;
+    }
+
+    .brand p {
+      margin: 2px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .controls {
+      display: grid;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+
+    .control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .toggle,
+    .small-button {
+      border: 1px solid var(--line);
+      background: var(--surface);
+      color: var(--text);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      cursor: pointer;
+    }
+
+    .toggle:hover,
+    .small-button:hover,
+    .direction-link:hover {
+      border-color: var(--line-strong);
+      background: var(--surface-2);
+    }
+
+    .label {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .direction-nav {
+      display: grid;
+      gap: 6px;
+    }
+
+    .direction-link {
+      display: grid;
+      gap: 3px;
+      width: 100%;
+      padding: 10px;
+      border: 1px solid transparent;
+      border-radius: var(--radius-sm);
+      background: transparent;
+      color: var(--text);
+      text-align: left;
+      cursor: pointer;
+    }
+
+    .direction-link strong {
+      font-size: 13px;
+    }
+
+    .direction-link span {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .direction-link.is-active {
+      border-color: var(--accent);
+      background: var(--accent-weak);
+    }
+
+    .note {
+      margin-top: 18px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    main {
+      min-width: 0;
+      padding: 24px;
+    }
+
+    .hero {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 20px;
+      margin-bottom: 20px;
+    }
+
+    .hero h2 {
+      margin: 0;
+      font-size: 24px;
+      line-height: 1.25;
+    }
+
+    .hero p {
+      max-width: 760px;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .compare-grid {
+      display: none;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 18px;
+    }
+
+    .compare-grid.is-visible {
+      display: grid;
+    }
+
+    .direction {
+      display: none;
+    }
+
+    .direction.is-visible {
+      display: block;
+    }
+
+    .direction-header {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 360px;
+      gap: 20px;
+      align-items: stretch;
+      margin-bottom: 18px;
+    }
+
+    .summary,
+    .decision-panel {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .summary {
+      padding: 18px;
+    }
+
+    .summary h3 {
+      margin: 0 0 8px;
+      font-size: 20px;
+    }
+
+    .summary p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 14px;
+      line-height: 1.6;
+    }
+
+    .tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-top: 14px;
+    }
+
+    .tag {
+      padding: 4px 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .decision-panel {
+      padding: 14px;
+    }
+
+    .decision-panel h4 {
+      margin: 0 0 8px;
+      font-size: 13px;
+    }
+
+    .decision-panel ul {
+      margin: 0;
+      padding-left: 18px;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.55;
+    }
+
+    .mockup {
+      overflow: hidden;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .app-chrome {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+
+    .window-dots {
+      display: flex;
+      gap: 6px;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 999px;
+      background: var(--line-strong);
+    }
+
+    .chrome-title {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .mini-search {
+      width: 220px;
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .app-body {
+      display: grid;
+      min-height: 620px;
+    }
+
+    .sidebar {
+      border-right: 1px solid var(--line);
+      background: var(--surface-2);
+      padding: 14px;
+    }
+
+    .side-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      border-radius: var(--radius-sm);
+      color: var(--muted);
+      font-size: 13px;
+    }
+
+    .side-item.active {
+      background: var(--surface);
+      color: var(--text);
+      box-shadow: inset 0 0 0 1px var(--line);
+    }
+
+    .workbench {
+      padding: 16px;
+      min-width: 0;
+    }
+
+    .section-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 12px;
+    }
+
+    .section-title h4 {
+      margin: 0;
+      font-size: 15px;
+    }
+
+    .section-title span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dropzone {
+      display: grid;
+      place-items: center;
+      min-height: 112px;
+      margin-bottom: 14px;
+      border: 1.5px dashed var(--line-strong);
+      border-radius: var(--radius);
+      background:
+        linear-gradient(135deg, color-mix(in srgb, var(--accent-weak) 40%, transparent), transparent),
+        var(--surface);
+      text-align: center;
+    }
+
+    .dropzone strong {
+      display: block;
+      margin-bottom: 5px;
+      font-size: 14px;
+    }
+
+    .dropzone span {
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .dropzone .drop-actions {
+      display: flex;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 10px;
+    }
+
+    .primary,
+    .secondary {
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: 7px 10px;
+      font-size: 12px;
+      cursor: pointer;
+    }
+
+    .primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .secondary {
+      background: var(--surface);
+      color: var(--text);
+    }
+
+    .batch-summary {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .metric {
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+    }
+
+    .metric strong {
+      display: block;
+      font-size: 18px;
+      line-height: 1.1;
+    }
+
+    .metric span {
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .task-list {
+      display: grid;
+      gap: 8px;
+    }
+
+    .task-row {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      min-height: 74px;
+      padding: 9px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .thumb {
+      width: 54px;
+      height: 54px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background:
+        linear-gradient(180deg, var(--surface), var(--surface-2));
+      position: relative;
+      overflow: hidden;
+    }
+
+    .thumb.page::before {
+      content: "";
+      position: absolute;
+      left: 9px;
+      top: 8px;
+      width: 36px;
+      height: 46px;
+      border: 1px solid var(--line-strong);
+      border-radius: 3px;
+      background: var(--surface);
+      box-shadow: 0 4px 10px rgba(0, 0, 0, 0.04);
+    }
+
+    .thumb.page::after {
+      content: "";
+      position: absolute;
+      left: 15px;
+      top: 17px;
+      width: 24px;
+      height: 3px;
+      background: var(--accent);
+      box-shadow: 0 8px 0 var(--line-strong), 0 16px 0 var(--line-strong);
+      opacity: 0.8;
+    }
+
+    .task-main {
+      min-width: 0;
+    }
+
+    .task-main strong {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      font-size: 13px;
+    }
+
+    .task-meta {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 22px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--surface-2);
+      color: var(--muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .badge.success {
+      border-color: color-mix(in srgb, var(--success) 30%, var(--line));
+      background: var(--success-weak);
+      color: var(--success);
+    }
+
+    .badge.warn {
+      border-color: color-mix(in srgb, var(--warn) 35%, var(--line));
+      background: var(--warn-weak);
+      color: var(--warn);
+    }
+
+    .badge.info {
+      border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+      background: var(--accent-weak);
+      color: var(--accent);
+    }
+
+    .badge.danger {
+      border-color: color-mix(in srgb, var(--danger) 35%, var(--line));
+      background: var(--danger-weak);
+      color: var(--danger);
+    }
+
+    .row-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .progress {
+      width: 92px;
+      height: 6px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: var(--surface-3);
+    }
+
+    .progress span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+
+    .viewer {
+      min-width: 0;
+      border-left: 1px solid var(--line);
+      background: var(--surface-2);
+      padding: 14px;
+    }
+
+    .page-preview {
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      min-height: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .preview-head,
+    .preview-foot {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 10px 12px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .preview-foot {
+      border-top: 1px solid var(--line);
+      border-bottom: 0;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .preview-head strong {
+      font-size: 13px;
+    }
+
+    .paper-area {
+      display: grid;
+      place-items: center;
+      padding: 18px;
+      background:
+        linear-gradient(45deg, color-mix(in srgb, var(--surface-3) 50%, transparent) 25%, transparent 25%),
+        var(--surface-2);
+      background-size: 18px 18px;
+    }
+
+    .paper {
+      width: min(86%, 360px);
+      aspect-ratio: 0.72;
+      border: 1px solid var(--line-strong);
+      border-radius: 4px;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+      padding: 24px;
+    }
+
+    .paper-line {
+      height: 7px;
+      margin-bottom: 12px;
+      border-radius: 999px;
+      background: var(--surface-3);
+    }
+
+    .paper-line.title {
+      width: 58%;
+      height: 12px;
+      background: var(--accent);
+      opacity: 0.8;
+    }
+
+    .paper-line.wide {
+      width: 92%;
+    }
+
+    .paper-line.mid {
+      width: 72%;
+    }
+
+    .paper-chart {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      gap: 10px;
+      margin-top: 22px;
+    }
+
+    .paper-chart div {
+      height: 66px;
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      border: 1px solid var(--line);
+    }
+
+    .gallery {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+
+    .page-card {
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .page-card .mini-paper {
+      display: grid;
+      place-items: center;
+      aspect-ratio: 0.72;
+      margin: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface-2);
+      color: var(--soft);
+      font-size: 22px;
+      font-weight: 700;
+    }
+
+    .page-card footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px;
+      border-top: 1px solid var(--line);
+      color: var(--muted);
+      font-size: 11px;
+    }
+
+    .search-layout {
+      display: grid;
+      grid-template-columns: 320px minmax(0, 1fr) 320px;
+      min-height: 620px;
+    }
+
+    .search-list,
+    .inspector {
+      padding: 14px;
+      background: var(--surface-2);
+    }
+
+    .search-list {
+      border-right: 1px solid var(--line);
+    }
+
+    .inspector {
+      border-left: 1px solid var(--line);
+    }
+
+    .result {
+      display: grid;
+      gap: 6px;
+      padding: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
+      margin-bottom: 8px;
+    }
+
+    .result strong {
+      font-size: 13px;
+    }
+
+    .result p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .json-box {
+      min-height: 270px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: color-mix(in srgb, var(--surface) 85%, #000 15%);
+      color: var(--muted);
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+    }
+
+    [data-theme="light"] .json-box {
+      background: #f8fafc;
+    }
+
+    .settings-layout {
+      display: grid;
+      grid-template-columns: 250px minmax(0, 1fr);
+      min-height: 620px;
+    }
+
+    .settings-main {
+      padding: 18px;
+    }
+
+    .settings-group {
+      max-width: 720px;
+      margin-bottom: 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+      overflow: hidden;
+    }
+
+    .settings-group header {
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .settings-group h5 {
+      margin: 0;
+      font-size: 14px;
+    }
+
+    .setting-row {
+      display: grid;
+      grid-template-columns: 210px minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+      padding: 12px 14px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .setting-row:last-child {
+      border-bottom: 0;
+    }
+
+    .setting-row label {
+      font-size: 13px;
+    }
+
+    .setting-row span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: 12px;
+    }
+
+    .compact-layout {
+      display: grid;
+      grid-template-columns: minmax(420px, 0.9fr) minmax(0, 1.1fr);
+      min-height: 620px;
+    }
+
+    .dense-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface);
+    }
+
+    .board {
+      padding: 14px;
+      background: var(--surface-2);
+    }
+
+    .status-strip {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+
+    .mockup-mini {
+      transform: scale(0.72);
+      transform-origin: top left;
+      width: 138.8%;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+
+    .compare-card {
+      overflow: hidden;
+      min-height: 560px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: var(--surface);
+    }
+
+    .compare-card header {
+      padding: 12px;
+      border-bottom: 1px solid var(--line);
+      background: var(--surface-2);
+    }
+
+    .compare-card header strong {
+      font-size: 13px;
+    }
+
+    @media (max-width: 1120px) {
+      .shell {
+        grid-template-columns: 1fr;
+      }
+
+      .rail {
+        position: relative;
+        height: auto;
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .direction-nav {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .direction-header,
+      .compare-grid.is-visible {
+        grid-template-columns: 1fr;
+      }
+
+      .app-body,
+      .search-layout,
+      .settings-layout,
+      .compact-layout {
+        grid-template-columns: 1fr !important;
+      }
+
+      .sidebar,
+      .viewer,
+      .search-list,
+      .inspector {
+        border: 0;
+        border-bottom: 1px solid var(--line);
+      }
+    }
+  </style>
+</head>
+<body data-theme="light">
+  <div class="shell">
+    <aside class="rail">
+      <div class="brand">
+        <div class="mark">S</div>
+        <div>
+          <h1>slicer design directions</h1>
+          <p>UX 方向展示页</p>
+        </div>
+      </div>
+
+      <div class="controls">
+        <div class="control-row">
+          <span class="label">主题</span>
+          <button class="toggle" id="themeToggle" type="button">切换暗色</button>
+        </div>
+        <div class="control-row">
+          <span class="label">视图</span>
+          <button class="small-button" id="compareToggle" type="button">对比全部</button>
+        </div>
+      </div>
+
+      <nav class="direction-nav" aria-label="Design directions">
+        <button class="direction-link is-active" type="button" data-target="direction-1">
+          <strong>01 工作台 + 页面预览</strong>
+          <span>拖入、处理、首图、页面 viewer 同屏。</span>
+        </button>
+        <button class="direction-link" type="button" data-target="direction-2">
+          <strong>02 资产图库优先</strong>
+          <span>把生成页面作为主角，弱化队列表格。</span>
+        </button>
+        <button class="direction-link" type="button" data-target="direction-3">
+          <strong>03 搜索优先工作区</strong>
+          <span>搜索结果、页面预览、JSON 详情三栏。</span>
+        </button>
+        <button class="direction-link" type="button" data-target="direction-4">
+          <strong>04 轻量批次面板</strong>
+          <span>Dropbox 式批处理反馈和失败恢复。</span>
+        </button>
+        <button class="direction-link" type="button" data-target="direction-5">
+          <strong>05 暗色聚焦</strong>
+          <span>安静深灰背景，突出页面图像和状态。</span>
+        </button>
+        <button class="direction-link" type="button" data-target="direction-6">
+          <strong>06 设置与状态强化</strong>
+          <span>主题、模型、API、隐私和资产状态一致化。</span>
+        </button>
+      </nav>
+
+      <div class="note">
+        评估时优先看四件事：拖入后是否有接住感，页面资产是否是主角，搜索可用状态是否清楚，整体是否现代干净而非后台或开发工具。
+      </div>
+    </aside>
+
+    <main>
+      <section class="hero">
+        <div>
+          <h2>slicer 视觉方向探索</h2>
+          <p>这些 mockup 使用黑白灰中性色、浅色/暗色主题、中等偏紧凑密度，以及“页面资产显影”的核心交互。每个方向都可作为最终 UI 美化的基底，也可以组合使用。</p>
+        </div>
+      </section>
+
+      <section class="compare-grid" id="compareGrid" aria-label="All directions comparison">
+        <div class="compare-card"><header><strong>01 工作台 + 页面预览</strong></header><div class="mockup-mini" data-clone="direction-1"></div></div>
+        <div class="compare-card"><header><strong>02 资产图库优先</strong></header><div class="mockup-mini" data-clone="direction-2"></div></div>
+        <div class="compare-card"><header><strong>03 搜索优先工作区</strong></header><div class="mockup-mini" data-clone="direction-3"></div></div>
+        <div class="compare-card"><header><strong>04 轻量批次面板</strong></header><div class="mockup-mini" data-clone="direction-4"></div></div>
+        <div class="compare-card"><header><strong>05 暗色聚焦</strong></header><div class="mockup-mini" data-clone="direction-5"></div></div>
+        <div class="compare-card"><header><strong>06 设置与状态强化</strong></header><div class="mockup-mini" data-clone="direction-6"></div></div>
+      </section>
+
+      <section class="direction is-visible" id="direction-1">
+        <div class="direction-header">
+          <div class="summary">
+            <h3>01 工作台 + 页面预览</h3>
+            <p>推荐作为主方向。左侧承载导入、批次摘要和任务 row，右侧展示当前文档页面 viewer。它最直接表达“文件落下，页面显影”，同时避免纯任务表格化。</p>
+            <div class="tags">
+              <span class="tag">推荐基底</span>
+              <span class="tag">拖拽突出</span>
+              <span class="tag">页面预览同屏</span>
+              <span class="tag">状态可见</span>
+            </div>
+          </div>
+          <div class="decision-panel">
+            <h4>适合原因</h4>
+            <ul>
+              <li>首张缩略图与页面 viewer 共同强化第一价值证明。</li>
+              <li>批量状态清楚，但页面资产仍是主角。</li>
+              <li>最符合 Obsidian 工作区 + Dropbox 反馈的组合。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mockup">
+          <div class="app-chrome">
+            <div class="window-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+            <div class="chrome-title">slicer / workbench</div>
+            <div class="mini-search">搜索页面资产...</div>
+          </div>
+          <div class="app-body" style="grid-template-columns: 190px minmax(420px, 0.9fr) minmax(0, 1.1fr);">
+            <aside class="sidebar">
+              <div class="side-item active"><span>工作台</span><span>12</span></div>
+              <div class="side-item"><span>搜索</span><span>220 页</span></div>
+              <div class="side-item"><span>分析</span><span>3</span></div>
+              <div class="side-item"><span>设置</span></div>
+            </aside>
+            <section class="workbench">
+              <div class="section-title"><h4>批量导入</h4><span>D:/KnowledgeBase</span></div>
+              <div class="dropzone">
+                <div>
+                  <strong>拖入文档，生成可查看、可搜索的页面资产</strong>
+                  <span>支持 PDF、PPTX、DOCX，松开后自动开始转换</span>
+                  <div class="drop-actions"><button class="primary">选择文件</button><button class="secondary">查看支持格式</button></div>
+                </div>
+              </div>
+              <div class="batch-summary">
+                <div class="metric"><strong>8</strong><span>文件</span></div>
+                <div class="metric"><strong>236</strong><span>页面</span></div>
+                <div class="metric"><strong>220</strong><span>可搜索</span></div>
+                <div class="metric"><strong>2</strong><span>需要处理</span></div>
+              </div>
+              <div class="task-list">
+                <article class="task-row">
+                  <div class="thumb page"></div>
+                  <div class="task-main"><strong>产品方案汇总.pptx</strong><div class="task-meta"><span>32 页</span><span class="badge success">可搜索</span><span class="badge">来源已保存</span></div></div>
+                  <div class="row-actions"><button class="secondary">查看页面</button></div>
+                </article>
+                <article class="task-row">
+                  <div class="thumb page"></div>
+                  <div class="task-main"><strong>研究报告 2026.pdf</strong><div class="task-meta"><span>正在转换页面 18/42</span><span class="badge info">转换中</span></div></div>
+                  <div class="row-actions"><div class="progress"><span style="width: 43%"></span></div></div>
+                </article>
+                <article class="task-row">
+                  <div class="thumb"></div>
+                  <div class="task-main"><strong>供应商清单.docx</strong><div class="task-meta"><span>文件受密码保护</span><span class="badge danger">转换失败</span></div></div>
+                  <div class="row-actions"><button class="secondary">查看原因</button></div>
+                </article>
+              </div>
+            </section>
+            <aside class="viewer">
+              <div class="page-preview">
+                <header class="preview-head"><strong>产品方案汇总.pptx / 第 1 页</strong><span class="badge success">可搜索</span></header>
+                <div class="paper-area"><div class="paper"><div class="paper-line title"></div><div class="paper-line wide"></div><div class="paper-line mid"></div><div class="paper-line wide"></div><div class="paper-chart"><div></div><div></div><div></div></div></div></div>
+                <footer class="preview-foot"><span>来源：D:/KnowledgeBase/originals/...</span><span>page_analysis_v1</span></footer>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="direction" id="direction-2">
+        <div class="direction-header">
+          <div class="summary">
+            <h3>02 资产图库优先</h3>
+            <p>把“页面已经生成”放到最前面。适合希望用户在转换后立即浏览页面资产的体验，但批量处理状态需要收敛到顶部或侧栏。</p>
+            <div class="tags"><span class="tag">页面是主角</span><span class="tag">图库浏览</span><span class="tag">弱化队列</span></div>
+          </div>
+          <div class="decision-panel">
+            <h4>适合原因</h4>
+            <ul>
+              <li>最强地表达“文件显影为页面”。</li>
+              <li>适合用户先确认页面，再进入搜索或 JSON。</li>
+              <li>需要谨慎处理转换中和失败项，避免状态被隐藏。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mockup">
+          <div class="app-chrome">
+            <div class="window-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+            <div class="chrome-title">slicer / assets</div>
+            <div class="mini-search">搜索已生成页面...</div>
+          </div>
+          <div class="app-body" style="grid-template-columns: 220px minmax(0, 1fr);">
+            <aside class="sidebar">
+              <div class="dropzone" style="min-height: 94px;"><div><strong>拖入新文档</strong><span>自动转换并加入图库</span></div></div>
+              <div class="side-item active"><span>最近批次</span><span>236 页</span></div>
+              <div class="side-item"><span>可搜索</span><span>220</span></div>
+              <div class="side-item"><span>索引中</span><span>12</span></div>
+              <div class="side-item"><span>失败项</span><span>2</span></div>
+            </aside>
+            <section class="workbench">
+              <div class="section-title"><h4>页面资产</h4><span class="badge info">索引更新中：12 页</span></div>
+              <div class="gallery">
+                <article class="page-card"><div class="mini-paper">1</div><footer><span>方案.pptx</span><span class="badge success">可搜索</span></footer></article>
+                <article class="page-card"><div class="mini-paper">2</div><footer><span>方案.pptx</span><span class="badge success">可搜索</span></footer></article>
+                <article class="page-card"><div class="mini-paper">3</div><footer><span>方案.pptx</span><span class="badge info">分析中</span></footer></article>
+                <article class="page-card"><div class="mini-paper">4</div><footer><span>报告.pdf</span><span class="badge">可预览</span></footer></article>
+                <article class="page-card"><div class="mini-paper">5</div><footer><span>报告.pdf</span><span class="badge warn">部分完成</span></footer></article>
+                <article class="page-card"><div class="mini-paper">6</div><footer><span>报告.pdf</span><span class="badge success">可搜索</span></footer></article>
+                <article class="page-card"><div class="mini-paper">7</div><footer><span>手册.docx</span><span class="badge info">索引中</span></footer></article>
+                <article class="page-card"><div class="mini-paper">8</div><footer><span>手册.docx</span><span class="badge danger">失败</span></footer></article>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+
+      <section class="direction" id="direction-3">
+        <div class="direction-header">
+          <div class="summary">
+            <h3>03 搜索优先工作区</h3>
+            <p>适合强调“以后找东西更轻松”的价值。三栏结构让搜索结果、页面预览和 JSON 详情都在同一上下文里。</p>
+            <div class="tags"><span class="tag">搜索体验</span><span class="tag">页面级结果</span><span class="tag">JSON 可达</span></div>
+          </div>
+          <div class="decision-panel">
+            <h4>适合原因</h4>
+            <ul>
+              <li>最能展现搜索命中具体页面的差异化。</li>
+              <li>适合与工作台方向组合，作为 Search 页基础。</li>
+              <li>不适合作为首屏主体验，会弱化拖入显影。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mockup">
+          <div class="app-chrome">
+            <div class="window-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
+            <input class="mini-search" value="多模态检索架构" aria-label="搜索" />
+            <span class="badge success">220 页可搜索</span>
+          </div>
+          <div class="search-layout">
+            <aside class="search-list">
+              <div class="section-title"><h4>搜索结果</h4><span>18 条</span></div>
+              <article class="result"><strong>多模态检索系统架构</strong><p>来自 产品方案汇总.pptx / 第 12 页。包含页面切片、模型分析与 BM25 索引。</p><span class="badge success">score 0.91</span></article>
+              <article class="result"><strong>页面级 JSON 生成流程</strong><p>来自 研究报告 2026.pdf / 第 4 页。描述 page_analysis_v1 输出字段。</p><span class="badge">score 0.84</span></article>
+              <article class="result"><strong>索引更新策略</strong><p>来自 技术说明.docx / 第 8 页。说明索引失败时不破坏旧索引。</p><span class="badge">score 0.77</span></article>
+            </aside>
+            <section class="paper-area">
+              <div class="paper"><div class="paper-line title"></div><div class="paper-line wide"></div><div class="paper-line mid"></div><div class="paper-line wide"></div><div class="paper-chart"><div></div><div></div><div></div></div></div>
+            </section>
+            <aside class="inspector">
+              <div class="section-title"><h4>页面详情</h4><span class="badge success">可搜索</span></div>
+              <div class="json-box">{
+  "page_id": "pg_12",
+  "source": "产品方案汇总.pptx",
+  "page_number": 12,
+  "analysis": {
+    "title": "多模态检索系统架构",
+    "summary": "页面展示文档切片、图像分析和索引流程"
+  }
+}</div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="direction" id="direction-4">
+        <div class="direction-header">
+          <div class="summary">
+            <h3>04 轻量批次面板</h3>
+            <p>借鉴 Dropbox 的文件处理反馈，把批次状态、失败恢复和可搜索数量压缩成轻量面板。适合处理大量文件时保持可控。</p>
+            <div class="tags"><span class="tag">批量处理</span><span class="tag">失败恢复</span><span class="tag">文件反馈</span></div>
+          </div>
+          <div class="decision-panel">
+            <h4>适合原因</h4>
+            <ul>
+              <li>非常适合导入/转换最不能失败的主约束。</li>
+              <li>能把错误从消失的 toast 改成上下文内恢复。</li>
+              <li>需要配合页面 viewer，否则会偏队列中心。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mockup">
+          <div class="app-chrome"><div class="window-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="chrome-title">slicer / batch</div><span class="badge info">当前批次正在处理</span></div>
+          <div class="compact-layout">
+            <section class="board">
+              <div class="dropzone"><div><strong>松开以导入 8 个文件</strong><span>有效文件会立即进入批次，自动开始转换</span></div></div>
+              <div class="status-strip">
+                <span class="badge info">8 个文件</span>
+                <span class="badge">236 页</span>
+                <span class="badge success">220 页可搜索</span>
+                <span class="badge warn">12 页索引中</span>
+                <span class="badge danger">2 个失败项</span>
+              </div>
+              <div class="task-list">
+                <article class="task-row"><div class="thumb page"></div><div class="task-main"><strong>客户访谈汇总.pdf</strong><div class="task-meta"><span>正在更新索引</span><span class="badge info">索引中</span></div></div><div class="progress"><span style="width: 68%"></span></div></article>
+                <article class="task-row"><div class="thumb page"></div><div class="task-main"><strong>竞品分析.pptx</strong><div class="task-meta"><span>46 页已生成</span><span class="badge success">可搜索</span></div></div><button class="secondary">查看页面</button></article>
+                <article class="task-row"><div class="thumb"></div><div class="task-main"><strong>旧版扫描件.pdf</strong><div class="task-meta"><span>无法读取此 PDF</span><span class="badge danger">转换失败</span></div></div><button class="secondary">重试</button></article>
+              </div>
+            </section>
+            <aside class="viewer">
+              <div class="section-title"><h4>失败详情</h4><span class="badge danger">可重试</span></div>
+              <div class="settings-group">
+                <header><h5>旧版扫描件.pdf</h5></header>
+                <div class="setting-row"><label>阶段</label><span>转换</span><button class="secondary">重试</button></div>
+                <div class="setting-row"><label>原因</label><span>无法读取此 PDF，可能已损坏或受保护。</span><button class="secondary">打开位置</button></div>
+                <div class="setting-row"><label>影响</label><span>其他文件不受影响，已成功页面仍可查看。</span><span></span></div>
+              </div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="direction" id="direction-5">
+        <div class="direction-header">
+          <div class="summary">
+            <h3>05 暗色聚焦</h3>
+            <p>以暗色模式作为展示重点，适合长时间处理和浏览页面资产。它需要避免变成开发工具风格，所以保留柔和灰阶和清晰状态色。</p>
+            <div class="tags"><span class="tag">暗色模式</span><span class="tag">页面聚焦</span><span class="tag">低疲劳</span></div>
+          </div>
+          <div class="decision-panel">
+            <h4>适合原因</h4>
+            <ul>
+              <li>满足暗色模式需求，并验证页面图像承载背景。</li>
+              <li>适合后续作为主题实现的对照样板。</li>
+              <li>应与浅色主题保持同样的信息结构。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mockup" data-local-dark>
+          <div class="app-chrome"><div class="window-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="chrome-title">slicer / dark focus</div><span class="badge success">可搜索</span></div>
+          <div class="app-body" style="grid-template-columns: 360px minmax(0, 1fr);">
+            <section class="workbench">
+              <div class="section-title"><h4>最近生成</h4><span>中等偏紧凑</span></div>
+              <div class="task-list">
+                <article class="task-row"><div class="thumb page"></div><div class="task-main"><strong>调研资料.pdf</strong><div class="task-meta"><span>88 页</span><span class="badge success">可搜索</span></div></div><button class="secondary">查看</button></article>
+                <article class="task-row"><div class="thumb page"></div><div class="task-main"><strong>培训手册.docx</strong><div class="task-meta"><span>索引更新中</span><span class="badge info">索引中</span></div></div><div class="progress"><span style="width: 72%"></span></div></article>
+                <article class="task-row"><div class="thumb"></div><div class="task-main"><strong>扫描件.pdf</strong><div class="task-meta"><span>部分页面生成失败</span><span class="badge warn">部分完成</span></div></div><button class="secondary">详情</button></article>
+              </div>
+            </section>
+            <aside class="viewer">
+              <div class="page-preview"><header class="preview-head"><strong>调研资料.pdf / 第 7 页</strong><span class="badge success">可搜索</span></header><div class="paper-area"><div class="paper"><div class="paper-line title"></div><div class="paper-line wide"></div><div class="paper-line mid"></div><div class="paper-line wide"></div><div class="paper-chart"><div></div><div></div><div></div></div></div></div><footer class="preview-foot"><span>暗色模式下使用中性承载背景</span><span>page 7/88</span></footer></div>
+            </aside>
+          </div>
+        </div>
+      </section>
+
+      <section class="direction" id="direction-6">
+        <div class="direction-header">
+          <div class="summary">
+            <h3>06 设置与状态强化</h3>
+            <p>展示轻量自定义设计系统如何覆盖设置页、主题、模型、隐私和 localhost API。适合作为实现 tokens 和组件规范的依据。</p>
+            <div class="tags"><span class="tag">设置分组</span><span class="tag">主题 token</span><span class="tag">高级能力不压迫主线</span></div>
+          </div>
+          <div class="decision-panel">
+            <h4>适合原因</h4>
+            <ul>
+              <li>能避免高级设置变成开发工具中心。</li>
+              <li>适合落地浅色/暗色和状态色 token。</li>
+              <li>应作为设置页方向，不建议作为主工作台方向。</li>
+            </ul>
+          </div>
+        </div>
+        <div class="mockup">
+          <div class="app-chrome"><div class="window-dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div><div class="chrome-title">slicer / settings</div><span class="badge">浅色 / 暗色</span></div>
+          <div class="settings-layout">
+            <aside class="sidebar">
+              <div class="side-item active"><span>显示与主题</span></div>
+              <div class="side-item"><span>工作目录</span></div>
+              <div class="side-item"><span>LibreOffice</span></div>
+              <div class="side-item"><span>模型配置</span></div>
+              <div class="side-item"><span>localhost API</span></div>
+              <div class="side-item"><span>隐私与安全</span></div>
+            </aside>
+            <section class="settings-main">
+              <div class="settings-group">
+                <header><h5>显示与主题</h5></header>
+                <div class="setting-row"><label>主题</label><span>跟随系统，也可手动切换浅色或暗色。</span><button class="secondary">切换</button></div>
+                <div class="setting-row"><label>密度</label><span>中等偏紧凑，任务 row 保持稳定高度。</span><button class="secondary">调整</button></div>
+                <div class="setting-row"><label>动效</label><span>短动效，仅用于接收、缩略图和状态变化。</span><span class="badge success">开启</span></div>
+              </div>
+              <div class="settings-group">
+                <header><h5>模型与隐私</h5></header>
+                <div class="setting-row"><label>模型服务</label><span>启用云端模型时，页面图片会发送到配置的服务。</span><button class="secondary">配置</button></div>
+                <div class="setting-row"><label>API key</label><span>已保存到系统凭据，不会写入普通日志。</span><span class="badge success">已配置</span></div>
+              </div>
+              <div class="settings-group">
+                <header><h5>localhost API</h5></header>
+                <div class="setting-row"><label>监听地址</label><span>127.0.0.1:4317</span><span class="badge success">运行中</span></div>
+                <div class="setting-row"><label>重任务 endpoint</label><span>POST /indexes/rebuild 需要本地 token。</span><button class="secondary">重置 token</button></div>
+              </div>
+            </section>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <script>
+    const body = document.body;
+    const themeToggle = document.getElementById("themeToggle");
+    const compareToggle = document.getElementById("compareToggle");
+    const compareGrid = document.getElementById("compareGrid");
+    const links = Array.from(document.querySelectorAll(".direction-link"));
+    const directions = Array.from(document.querySelectorAll(".direction"));
+
+    function setTheme(theme) {
+      body.dataset.theme = theme;
+      themeToggle.textContent = theme === "dark" ? "切换浅色" : "切换暗色";
+      localStorage.setItem("slicer-direction-theme", theme);
+    }
+
+    function showDirection(id) {
+      compareGrid.classList.remove("is-visible");
+      compareToggle.textContent = "对比全部";
+      directions.forEach((direction) => {
+        direction.classList.toggle("is-visible", direction.id === id);
+      });
+      links.forEach((link) => {
+        link.classList.toggle("is-active", link.dataset.target === id);
+      });
+    }
+
+    function hydrateCompare() {
+      document.querySelectorAll("[data-clone]").forEach((target) => {
+        const source = document.getElementById(target.dataset.clone);
+        const mockup = source && source.querySelector(".mockup");
+        if (mockup && !target.hasChildNodes()) {
+          target.appendChild(mockup.cloneNode(true));
+        }
+      });
+    }
+
+    themeToggle.addEventListener("click", () => {
+      setTheme(body.dataset.theme === "dark" ? "light" : "dark");
+    });
+
+    compareToggle.addEventListener("click", () => {
+      hydrateCompare();
+      const visible = !compareGrid.classList.contains("is-visible");
+      compareGrid.classList.toggle("is-visible", visible);
+      directions.forEach((direction) => direction.classList.toggle("is-visible", false));
+      links.forEach((link) => link.classList.toggle("is-active", false));
+      compareToggle.textContent = visible ? "退出对比" : "对比全部";
+      if (!visible) {
+        showDirection("direction-1");
+      }
+    });
+
+    links.forEach((link) => {
+      link.addEventListener("click", () => showDirection(link.dataset.target));
+    });
+
+    const savedTheme = localStorage.getItem("slicer-direction-theme");
+    setTheme(savedTheme || "light");
+  </script>
+</body>
+</html>

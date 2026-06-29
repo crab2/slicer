@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import { convertFileSrc } from "@tauri-apps/api/core";
 import { Button } from "../../../components/common/Button";
 import { StatusBadge } from "../../../components/common/StatusBadge";
+import { tauriClient } from "../../../lib/tauriClient";
 import type {
   DocumentDto,
   JobDto,
@@ -15,6 +17,7 @@ interface DocumentListProps {
   pagesByDocument: Record<string, PageWorkbenchDto[]>;
   jobs: JobDto[];
   isLoading: boolean;
+  workspacePath?: string | null;
   onRetry?: (documentId: string) => void;
   onAnalyzePage?: (pageId: string) => void;
   onReanalyzeDocument?: (documentId: string) => void;
@@ -33,6 +36,7 @@ export function DocumentList({
   pagesByDocument,
   jobs,
   isLoading,
+  workspacePath,
   onRetry,
   onAnalyzePage,
   onReanalyzeDocument,
@@ -125,22 +129,14 @@ export function DocumentList({
           <p className="document-empty-result">没有匹配的文档。</p>
         ) : (
           <>
-            <div className="document-table" role="table" aria-label="文档列表">
-              <div className="document-table-row document-table-head" role="row">
-                <span role="columnheader">文档</span>
-                <span role="columnheader">状态</span>
-                <span role="columnheader">页数</span>
-                <span role="columnheader">分析</span>
-                <span role="columnheader">更新于</span>
-                <span role="columnheader">操作</span>
-              </div>
-
+            <div className="document-asset-list" role="list" aria-label="页面资产列表">
               {visibleDocuments.map((doc) => (
                 <DocumentRow
                   key={doc.document_id}
                   doc={doc}
                   pages={pagesByDocument[doc.document_id] ?? []}
                   job={doc.job_id ? jobsById.get(doc.job_id) : null}
+                  workspacePath={workspacePath}
                   onRetry={onRetry}
                   onAnalyzePage={onAnalyzePage}
                   onReanalyzeDocument={onReanalyzeDocument}
@@ -173,6 +169,7 @@ interface DocumentRowProps {
   doc: DocumentDto;
   pages: PageWorkbenchDto[];
   job?: JobDto | null;
+  workspacePath?: string | null;
   onRetry?: (documentId: string) => void;
   onAnalyzePage?: (pageId: string) => void;
   onReanalyzeDocument?: (documentId: string) => void;
@@ -190,6 +187,7 @@ function DocumentRow({
   doc,
   pages,
   job,
+  workspacePath,
   onRetry,
   onAnalyzePage,
   onReanalyzeDocument,
@@ -206,132 +204,150 @@ function DocumentRow({
   const isFailed = doc.status === "failed";
   const failedPages = pages.filter((page) => page.status === "failed");
   const failedPageCount = Math.max(failedPages.length, doc.analysis_failed_pages);
+  const firstFailedPage = failedPages.find((page) => page.error_summary);
+  const failedPageSummary = firstFailedPage?.error_summary
+    ? `第 ${firstFailedPage.page_number} 页 ${firstFailedPage.error_summary}`
+    : failedPageCount > 0
+      ? `有 ${failedPageCount} 页处理失败，可展开页面详情查看。`
+      : null;
   const isReanalyzing = reanalyzingDocumentId === doc.document_id;
   const isReanalyzingFailed = reanalyzingFailedDocumentId === doc.document_id;
   const isDeleting = deletingDocumentId === doc.document_id;
   const firstImagePage = pages.find((page) => Boolean(page.image_path));
+  const generatedPageCount = pages.filter((page) => Boolean(page.image_path)).length;
+  const analyzablePageCount = pages.filter((page) => page.status === "rendered").length;
+  const pageTotal = doc.page_count ?? pages.length;
+  const fallbackThumbnailSrc = useMemo(
+    () => resolvePageImageSrc(firstImagePage?.image_path, workspacePath),
+    [firstImagePage?.image_path, workspacePath],
+  );
+  const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
+  const [isThumbnailLoading, setIsThumbnailLoading] = useState(false);
+  const [thumbnailFailed, setThumbnailFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setThumbnailFailed(false);
+    setThumbnailSrc(null);
+
+    if (!firstImagePage?.page_id) {
+      setIsThumbnailLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsThumbnailLoading(true);
+    tauriClient
+      .getPageImagePreview(firstImagePage.page_id)
+      .then((dataUrl) => {
+        if (!cancelled) {
+          setThumbnailSrc(dataUrl ?? fallbackThumbnailSrc);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setThumbnailSrc(fallbackThumbnailSrc);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsThumbnailLoading(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [firstImagePage?.page_id, fallbackThumbnailSrc]);
 
   return (
-    <div className="document-table-row" role="row">
-      <div className="document-name-cell" role="cell">
-        <span className="document-type-label">{doc.file_type.toUpperCase()}</span>
-        <span className="document-name-text" title={doc.original_filename}>
-          {doc.original_filename}
-        </span>
-        <span className="document-path-text" title={doc.original_path}>
-          {doc.original_path}
-        </span>
-      </div>
+    <article className="document-asset-row" role="listitem" aria-label={doc.original_filename}>
+      <button
+        type="button"
+        className="document-thumb-button"
+        onClick={() => {
+          if (firstImagePage && onOpenDocumentImage) {
+            onOpenDocumentImage(firstImagePage);
+          }
+        }}
+        disabled={!firstImagePage || !onOpenDocumentImage}
+        title={
+          firstImagePage
+            ? "查看此文档第一页图片"
+            : "页面图片生成后会出现在这里"
+        }
+      >
+        {firstImagePage ? (
+          isThumbnailLoading ? (
+            <span className="document-thumb-loading">加载预览</span>
+          ) : thumbnailSrc && !thumbnailFailed ? (
+            <img
+              className="document-thumb-image"
+              src={thumbnailSrc}
+              alt={`${doc.original_filename} 第 ${firstImagePage.page_number} 页`}
+              onError={() => setThumbnailFailed(true)}
+            />
+          ) : (
+            <span className="document-thumb-real" aria-hidden="true" data-failed="true">
+              <span className="document-thumb-page" />
+              <span className="document-thumb-lines" />
+            </span>
+          )
+        ) : (
+          <span className="document-thumb-placeholder">
+            <strong>{doc.file_type.toUpperCase()}</strong>
+            <small>暂无页面图片</small>
+          </span>
+        )}
+      </button>
 
-      <div className="document-status-cell" role="cell">
-        <StatusBadge tone={statusTone(doc.status)}>
-          {statusLabel(doc.status)}
-        </StatusBadge>
+      <div className="document-asset-main">
+        <div className="document-asset-header">
+          <div className="document-name-cell">
+            <span className="document-type-label">{doc.file_type.toUpperCase()}</span>
+            <span className="document-name-text" title={doc.original_filename}>
+              {doc.original_filename}
+            </span>
+            <span className="document-path-text" title={doc.original_path}>
+              {doc.original_path}
+            </span>
+          </div>
+          <div className="document-status-stack">
+            <StatusBadge tone={statusTone(doc.status)}>
+              {statusLabel(doc.status)}
+            </StatusBadge>
+            <span className="document-date-cell">
+              更新于 {formatDateTime(doc.updated_at)}
+            </span>
+          </div>
+        </div>
+
+        <div className="document-asset-stats" aria-label="页面资产状态">
+          <span>{pageTotal} 页</span>
+          <span>{generatedPageCount} 页已生成图片</span>
+          <span>{doc.analysis_succeeded_pages} 页已分析</span>
+          {analyzablePageCount > 0 ? <span>{analyzablePageCount} 页可分析</span> : null}
+          {failedPageCount > 0 ? (
+            <span className="doc-summary-failed">{failedPageCount} 页失败</span>
+          ) : null}
+        </div>
+
         {isImporting ? (
-          <div className="document-inline-progress">
+          <div className="document-inline-progress" aria-label={`导入进度 ${boundedProgress(job.progress)}%`}>
             <span
               className="progress-fill"
               style={{ width: `${boundedProgress(job.progress)}%` }}
             />
           </div>
         ) : null}
-      </div>
 
-      <span className="document-table-number" role="cell">
-        {doc.page_count ?? 0} 页
-      </span>
+        {failedPageSummary ? (
+          <p className="job-error">失败原因：{failedPageSummary}</p>
+        ) : null}
 
-      <div className="document-analysis-cell" role="cell">
-        <span>{doc.analysis_succeeded_pages} 页已分析</span>
-        {failedPageCount > 0 ? (
-          <span className="doc-summary-failed">{failedPageCount} 页失败</span>
-        ) : null}
-      </div>
-
-      <span className="document-date-cell" role="cell">
-        {formatDateTime(doc.updated_at)}
-      </span>
-
-      <div className="document-row-actions" role="cell">
-        {onOpenSourceFile ? (
-          <Button
-            variant="secondary"
-            className="document-row-button"
-            onClick={() => onOpenSourceFile(doc.original_path)}
-            title="使用系统默认应用打开导入的源文件"
-          >
-            查看源文件
-          </Button>
-        ) : null}
-        {onOpenDocumentImage ? (
-          <Button
-            variant="secondary"
-            className="document-row-button"
-            onClick={() => {
-              if (firstImagePage) {
-                onOpenDocumentImage(firstImagePage);
-              }
-            }}
-            disabled={!firstImagePage}
-            title={
-              firstImagePage
-                ? "打开此文档 pages 目录中的第一张页面图片"
-                : "此文档还没有可查看的页面图片"
-            }
-          >
-            查看图片
-          </Button>
-        ) : null}
-        {onReanalyzeFailedPages && failedPageCount > 0 ? (
-          <Button
-            variant="secondary"
-            className="document-row-button"
-            onClick={() => onReanalyzeFailedPages(doc.document_id)}
-            disabled={isReanalyzingFailed}
-            title="重新分析此文档中的失败页面"
-          >
-            {isReanalyzingFailed ? "重分析中" : "重试失败页"}
-          </Button>
-        ) : null}
-        {onReanalyzeDocument && doc.status === "ready" ? (
-          <Button
-            variant="secondary"
-            className="document-row-button"
-            onClick={() => onReanalyzeDocument(doc.document_id)}
-            disabled={isReanalyzing}
-            title="重新分析此文档"
-          >
-            {isReanalyzing ? "重分析中" : "重分析"}
-          </Button>
-        ) : null}
-        {isFailed && onRetry ? (
-          <Button
-            variant="secondary"
-            className="document-row-button"
-            onClick={() => onRetry(doc.document_id)}
-          >
-            重试导入
-          </Button>
-        ) : null}
-        {onDeleteDocument ? (
-          <Button
-            variant="secondary"
-            className="document-row-button document-row-button-danger"
-            onClick={() => {
-              if (window.confirm(`确定删除文档“${doc.original_filename}”吗？`)) {
-                onDeleteDocument(doc.document_id);
-              }
-            }}
-            disabled={isDeleting}
-            title="删除此文档及其工作区文件"
-          >
-            {isDeleting ? "删除中" : "删除"}
-          </Button>
-        ) : null}
-      </div>
-
-      {job?.last_event_message || doc.error_summary || pages.length > 0 ? (
-        <div className="document-row-detail">
+        {job?.last_event_message || doc.error_summary || pages.length > 0 ? (
+          <div className="document-row-detail">
           {job?.last_event_message ? (
             <p className="job-event">{job.last_event_message}</p>
           ) : null}
@@ -387,9 +403,88 @@ function DocumentRow({
               </div>
             </details>
           ) : null}
-        </div>
-      ) : null}
-    </div>
+          </div>
+        ) : null}
+      </div>
+
+      <div className="document-row-actions">
+        {onOpenDocumentImage ? (
+          <Button
+            variant="primary"
+            className="document-row-button"
+            onClick={() => {
+              if (firstImagePage) {
+                onOpenDocumentImage(firstImagePage);
+              }
+            }}
+            disabled={!firstImagePage}
+            title={
+              firstImagePage
+                ? "打开此文档 pages 目录中的第一张页面图片"
+                : "此文档还没有可查看的页面图片"
+            }
+          >
+            查看页面
+          </Button>
+        ) : null}
+        {onReanalyzeFailedPages && failedPageCount > 0 ? (
+          <Button
+            variant="secondary"
+            className="document-row-button"
+            onClick={() => onReanalyzeFailedPages(doc.document_id)}
+            disabled={isReanalyzingFailed}
+            title="重新分析此文档中的失败页面"
+          >
+            {isReanalyzingFailed ? "重分析中" : "重试失败页"}
+          </Button>
+        ) : null}
+        {onReanalyzeDocument && doc.status === "ready" ? (
+          <Button
+            variant="secondary"
+            className="document-row-button"
+            onClick={() => onReanalyzeDocument(doc.document_id)}
+            disabled={isReanalyzing}
+            title="重新分析此文档"
+          >
+            {isReanalyzing ? "重分析中" : "重分析"}
+          </Button>
+        ) : null}
+        {isFailed && onRetry ? (
+          <Button
+            variant="secondary"
+            className="document-row-button"
+            onClick={() => onRetry(doc.document_id)}
+          >
+            重试导入
+          </Button>
+        ) : null}
+        {onOpenSourceFile ? (
+          <Button
+            variant="secondary"
+            className="document-row-button"
+            onClick={() => onOpenSourceFile(doc.original_path)}
+            title="使用系统默认应用打开导入的源文件"
+          >
+            源文件
+          </Button>
+        ) : null}
+        {onDeleteDocument ? (
+          <Button
+            variant="secondary"
+            className="document-row-button document-row-button-danger"
+            onClick={() => {
+              if (window.confirm(`确定删除文档“${doc.original_filename}”吗？`)) {
+                onDeleteDocument(doc.document_id);
+              }
+            }}
+            disabled={isDeleting}
+            title="删除此文档及其工作区文件"
+          >
+            {isDeleting ? "删除中" : "删除"}
+          </Button>
+        ) : null}
+      </div>
+    </article>
   );
 }
 
@@ -457,6 +552,43 @@ function PageAnalysisSummaryBlock({
       </p>
     </div>
   );
+}
+
+function resolvePageImageSrc(
+  imagePath: string | null | undefined,
+  workspacePath: string | null | undefined,
+) {
+  const absolutePath = resolveWorkspacePath(imagePath, workspacePath);
+  if (!absolutePath) {
+    return null;
+  }
+  try {
+    return convertFileSrc(absolutePath);
+  } catch {
+    return null;
+  }
+}
+
+function resolveWorkspacePath(
+  relativePath: string | null | undefined,
+  workspacePath: string | null | undefined,
+) {
+  if (!relativePath || !workspacePath) {
+    return null;
+  }
+
+  const normalized = relativePath.replace(/\\/g, "/");
+  if (
+    normalized.startsWith("/") ||
+    /^[A-Za-z]:\//.test(normalized) ||
+    normalized.split("/").includes("..")
+  ) {
+    return null;
+  }
+
+  const separator = workspacePath.includes("\\") ? "\\" : "/";
+  const root = workspacePath.replace(/[\\/]+$/, "");
+  return `${root}${separator}${normalized.replace(/\//g, separator)}`;
 }
 
 function filterDocuments(documents: DocumentDto[], query: string) {

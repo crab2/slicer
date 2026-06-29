@@ -106,6 +106,10 @@ mod tests {
             redact_secrets("unexpected token at line 5 column 3"),
             "unexpected token at line 5 column 3"
         );
+        assert_eq!(
+            redact_secrets("key_fingerprint=len=17; prefix=sk-1; suffix=abcd"),
+            "key_fingerprint=len=17; prefix=sk-1; suffix=abcd"
+        );
     }
 
     #[test]
