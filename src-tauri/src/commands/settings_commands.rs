@@ -1,6 +1,6 @@
 use crate::domain::settings::{
-    ApiKeyListDto, AppSettingsDto, ModelConfigurationStatusDto, ModelListDto,
-    PrivacyNoticeStatusDto,
+    ApiKeyListDto, AppSettingsDto, ModelConfigurationStatusDto, ModelListDto, ModelProfileListDto,
+    ModelProfileUpsertRequestDto, PrivacyNoticeStatusDto,
 };
 use crate::errors::AppError;
 use crate::providers::libreoffice_converter;
@@ -81,6 +81,40 @@ pub fn delete_provider_api_key(provider: String) -> Result<(), AppError> {
 }
 
 #[tauri::command]
+pub fn list_model_profiles(
+    workspace: State<'_, WorkspaceService>,
+) -> Result<ModelProfileListDto, AppError> {
+    SettingsService::list_model_profiles(&workspace)
+}
+
+#[tauri::command]
+pub fn upsert_model_profile(
+    request: ModelProfileUpsertRequestDto,
+    workspace: State<'_, WorkspaceService>,
+    api_server: State<'_, ApiServerService>,
+) -> Result<ModelProfileListDto, AppError> {
+    SettingsService::upsert_model_profile(&workspace, &api_server, &request)
+}
+
+#[tauri::command]
+pub fn activate_model_profile(
+    profile_id: String,
+    workspace: State<'_, WorkspaceService>,
+    api_server: State<'_, ApiServerService>,
+) -> Result<ModelProfileListDto, AppError> {
+    SettingsService::activate_model_profile(&workspace, &api_server, &profile_id)
+}
+
+#[tauri::command]
+pub fn delete_model_profile(
+    profile_id: String,
+    workspace: State<'_, WorkspaceService>,
+    api_server: State<'_, ApiServerService>,
+) -> Result<ModelProfileListDto, AppError> {
+    SettingsService::delete_model_profile(&workspace, &api_server, &profile_id)
+}
+
+#[tauri::command]
 pub fn get_model_configuration_status(
     workspace: State<'_, WorkspaceService>,
 ) -> Result<ModelConfigurationStatusDto, AppError> {
@@ -90,21 +124,44 @@ pub fn get_model_configuration_status(
 #[tauri::command]
 pub async fn list_openai_models(
     settings: AppSettingsDto,
+    api_key: Option<String>,
+    profile_id: Option<String>,
     workspace: State<'_, WorkspaceService>,
 ) -> Result<ModelListDto, AppError> {
     let workspace = workspace.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let api_key =
-            SettingsService::read_active_api_key_for_provider_from_workspace(&workspace, "openai")?
+        let resolved_api_key = match api_key {
+            Some(key) if !key.trim().is_empty() => key,
+            _ if profile_id
+                .as_deref()
+                .is_some_and(|id| !id.trim().is_empty()) =>
+            {
+                SettingsService::read_api_key_for_model_profile(
+                    &workspace,
+                    profile_id.as_deref().unwrap_or_default(),
+                )?
                 .ok_or_else(|| {
                     AppError::new(
                         "api_key_missing",
-                        "请先为 OpenAI 配置并启用 API Key。",
+                        "请先为该模型配置填写 API Key。",
                         "settings",
                         true,
                     )
-                })?;
-        OpenAIProvider::list_models_with_api_key(&settings, &api_key)
+                })?
+            }
+            _ => SettingsService::read_active_api_key_for_provider_from_workspace(
+                &workspace, "openai",
+            )?
+            .ok_or_else(|| {
+                AppError::new(
+                    "api_key_missing",
+                    "请先为 OpenAI 配置 API Key。",
+                    "settings",
+                    true,
+                )
+            })?,
+        };
+        OpenAIProvider::list_models_with_api_key(&settings, &resolved_api_key)
     })
     .await
     .map_err(|e| {

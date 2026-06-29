@@ -12,56 +12,67 @@ import type {
 
 const PAGE_SIZE = 8;
 
-interface DocumentListProps {
+export type MediaStatusFilter = "all" | "ready" | "failed" | "has_failed_pages" | "needs_analysis";
+
+export interface MediaAssetSelection {
+  kind: "document" | "page";
+  ids: string[];
+  label: string;
+  disabledReason?: string | null;
+}
+
+interface MediaAssetListProps {
   documents: DocumentDto[];
   pagesByDocument: Record<string, PageWorkbenchDto[]>;
   jobs: JobDto[];
   isLoading: boolean;
   workspacePath?: string | null;
+  query: string;
+  statusFilter: MediaStatusFilter;
+  selectedDocumentIds: string[];
+  onQueryChange: (query: string) => void;
+  onStatusFilterChange: (filter: MediaStatusFilter) => void;
+  onSelectionChange: (documentIds: string[]) => void;
   onRetry?: (documentId: string) => void;
-  onAnalyzePage?: (pageId: string) => void;
-  onReanalyzeDocument?: (documentId: string) => void;
-  onReanalyzeFailedPages?: (documentId: string) => void;
   onOpenSourceFile?: (path: string) => void;
   onOpenDocumentImage?: (page: PageWorkbenchDto) => void;
   onDeleteDocument?: (documentId: string) => void;
-  analyzingPageId?: string | null;
-  reanalyzingDocumentId?: string | null;
-  reanalyzingFailedDocumentId?: string | null;
+  onReanalysisRequest?: (selection: MediaAssetSelection) => void;
   deletingDocumentId?: string | null;
 }
 
-export function DocumentList({
+export function MediaAssetList({
   documents,
   pagesByDocument,
   jobs,
   isLoading,
   workspacePath,
+  query,
+  statusFilter,
+  selectedDocumentIds,
+  onQueryChange,
+  onStatusFilterChange,
+  onSelectionChange,
   onRetry,
-  onAnalyzePage,
-  onReanalyzeDocument,
-  onReanalyzeFailedPages,
   onOpenSourceFile,
   onOpenDocumentImage,
   onDeleteDocument,
-  analyzingPageId,
-  reanalyzingDocumentId,
-  reanalyzingFailedDocumentId,
+  onReanalysisRequest,
   deletingDocumentId,
-}: DocumentListProps) {
-  const [query, setQuery] = useState("");
+}: MediaAssetListProps) {
   const [page, setPage] = useState(1);
-
-  const jobsById = useMemo(() => new Map(jobs.map((j) => [j.job_id, j])), [jobs]);
+  const selectedSet = useMemo(() => new Set(selectedDocumentIds), [selectedDocumentIds]);
+  const jobsById = useMemo(() => new Map(jobs.map((job) => [job.job_id, job])), [jobs]);
   const totalPages = documents.reduce((sum, doc) => sum + (doc.page_count ?? 0), 0);
-  const failedCount = documents.filter((d) => d.status === "failed").length;
+  const failedCount = documents.filter((doc) => doc.status === "failed").length;
   const failedPageCount = documents.reduce(
     (sum, doc) => sum + doc.analysis_failed_pages,
     0,
   );
+
   const filteredDocuments = useMemo(
-    () => filterDocuments(documents, query),
-    [documents, query],
+    () => filterDocuments(documents, pagesByDocument, query, statusFilter),
+    [documents, pagesByDocument, query, statusFilter],
   );
   const pageCount = Math.max(1, Math.ceil(filteredDocuments.length / PAGE_SIZE));
   const currentPage = Math.min(page, pageCount);
@@ -76,14 +87,35 @@ export function DocumentList({
 
   useEffect(() => {
     setPage(1);
-  }, [query]);
+  }, [query, statusFilter]);
 
   useEffect(() => {
     setPage((value) => Math.min(value, pageCount));
   }, [pageCount]);
 
+  function updateDocumentSelection(documentId: string, checked: boolean) {
+    const next = new Set(selectedDocumentIds);
+    if (checked) {
+      next.add(documentId);
+    } else {
+      next.delete(documentId);
+    }
+    onSelectionChange([...next]);
+  }
+
+  function selectVisibleDocuments() {
+    const next = new Set(selectedDocumentIds);
+    for (const doc of visibleDocuments) {
+      const validation = getDocumentReanalysisValidation(doc, pagesByDocument[doc.document_id] ?? []);
+      if (!validation.disabledReason) {
+        next.add(doc.document_id);
+      }
+    }
+    onSelectionChange([...next]);
+  }
+
   if (isLoading) {
-    return <p className="muted-copy">文档加载中...</p>;
+    return <p className="muted-copy">媒体资产加载中...</p>;
   }
 
   if (documents.length === 0) {
@@ -91,9 +123,9 @@ export function DocumentList({
   }
 
   return (
-    <div className="document-list">
+    <div className="media-asset-list">
       <div className="doc-summary">
-        <span>{documents.length} 个文档</span>
+        <span>{documents.length} 个媒体</span>
         <span className="doc-summary-sep">·</span>
         <span>{totalPages} 页</span>
         {failedCount > 0 ? (
@@ -110,43 +142,65 @@ export function DocumentList({
         ) : null}
       </div>
 
-      <div className="document-list-panel">
-        <div className="document-list-toolbar">
+      <div className="document-list-panel media-management-panel">
+        <div className="document-list-toolbar media-management-toolbar">
           <label className="document-search-field">
-            <span>搜索文档</span>
+            <span>搜索媒体</span>
             <input
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => onQueryChange(event.target.value)}
               placeholder="按文件名、路径、类型或状态搜索"
             />
           </label>
-          <p className="document-list-count">
-            {filteredDocuments.length} / {documents.length} 个文档
-          </p>
+          <label className="media-filter-field">
+            <span>状态</span>
+            <select
+              value={statusFilter}
+              onChange={(event) =>
+                onStatusFilterChange(event.target.value as MediaStatusFilter)
+              }
+            >
+              <option value="all">全部</option>
+              <option value="ready">已完成</option>
+              <option value="needs_analysis">待分析</option>
+              <option value="has_failed_pages">有失败页</option>
+              <option value="failed">导入失败</option>
+            </select>
+          </label>
+          <div className="media-selection-actions">
+            <p className="document-list-count">
+              {filteredDocuments.length} / {documents.length} 个媒体
+            </p>
+            <Button onClick={selectVisibleDocuments} disabled={visibleDocuments.length === 0}>
+              选择当前页可重分析项
+            </Button>
+            <Button onClick={() => onSelectionChange([])} disabled={selectedDocumentIds.length === 0}>
+              清空选择
+            </Button>
+          </div>
         </div>
 
         {filteredDocuments.length === 0 ? (
-          <p className="document-empty-result">没有匹配的文档。</p>
+          <p className="document-empty-result">没有匹配的媒体。</p>
         ) : (
           <>
-            <div className="document-asset-list" role="list" aria-label="页面资产列表">
+            <div className="document-asset-list" role="list" aria-label="媒体资产列表">
               {visibleDocuments.map((doc) => (
-                <DocumentRow
+                <MediaDocumentRow
                   key={doc.document_id}
                   doc={doc}
                   pages={pagesByDocument[doc.document_id] ?? []}
                   job={doc.job_id ? jobsById.get(doc.job_id) : null}
                   workspacePath={workspacePath}
+                  selected={selectedSet.has(doc.document_id)}
+                  onSelectedChange={(checked) =>
+                    updateDocumentSelection(doc.document_id, checked)
+                  }
                   onRetry={onRetry}
-                  onAnalyzePage={onAnalyzePage}
-                  onReanalyzeDocument={onReanalyzeDocument}
-                  onReanalyzeFailedPages={onReanalyzeFailedPages}
                   onOpenSourceFile={onOpenSourceFile}
                   onOpenDocumentImage={onOpenDocumentImage}
                   onDeleteDocument={onDeleteDocument}
-                  analyzingPageId={analyzingPageId}
-                  reanalyzingDocumentId={reanalyzingDocumentId}
-                  reanalyzingFailedDocumentId={reanalyzingFailedDocumentId}
+                  onReanalysisRequest={onReanalysisRequest}
                   deletingDocumentId={deletingDocumentId}
                 />
               ))}
@@ -165,41 +219,35 @@ export function DocumentList({
   );
 }
 
-interface DocumentRowProps {
+interface MediaDocumentRowProps {
   doc: DocumentDto;
   pages: PageWorkbenchDto[];
   job?: JobDto | null;
   workspacePath?: string | null;
+  selected: boolean;
+  onSelectedChange: (checked: boolean) => void;
   onRetry?: (documentId: string) => void;
-  onAnalyzePage?: (pageId: string) => void;
-  onReanalyzeDocument?: (documentId: string) => void;
-  onReanalyzeFailedPages?: (documentId: string) => void;
   onOpenSourceFile?: (path: string) => void;
   onOpenDocumentImage?: (page: PageWorkbenchDto) => void;
   onDeleteDocument?: (documentId: string) => void;
-  analyzingPageId?: string | null;
-  reanalyzingDocumentId?: string | null;
-  reanalyzingFailedDocumentId?: string | null;
+  onReanalysisRequest?: (selection: MediaAssetSelection) => void;
   deletingDocumentId?: string | null;
 }
 
-function DocumentRow({
+function MediaDocumentRow({
   doc,
   pages,
   job,
   workspacePath,
+  selected,
+  onSelectedChange,
   onRetry,
-  onAnalyzePage,
-  onReanalyzeDocument,
-  onReanalyzeFailedPages,
   onOpenSourceFile,
   onOpenDocumentImage,
   onDeleteDocument,
-  analyzingPageId,
-  reanalyzingDocumentId,
-  reanalyzingFailedDocumentId,
+  onReanalysisRequest,
   deletingDocumentId,
-}: DocumentRowProps) {
+}: MediaDocumentRowProps) {
   const isImporting = doc.status === "importing" && job;
   const isFailed = doc.status === "failed";
   const failedPages = pages.filter((page) => page.status === "failed");
@@ -210,8 +258,6 @@ function DocumentRow({
     : failedPageCount > 0
       ? `有 ${failedPageCount} 页处理失败，可展开页面详情查看。`
       : null;
-  const isReanalyzing = reanalyzingDocumentId === doc.document_id;
-  const isReanalyzingFailed = reanalyzingFailedDocumentId === doc.document_id;
   const isDeleting = deletingDocumentId === doc.document_id;
   const firstImagePage = pages.find((page) => Boolean(page.image_path));
   const generatedPageCount = pages.filter((page) => Boolean(page.image_path)).length;
@@ -224,6 +270,7 @@ function DocumentRow({
   const [thumbnailSrc, setThumbnailSrc] = useState<string | null>(null);
   const [isThumbnailLoading, setIsThumbnailLoading] = useState(false);
   const [thumbnailFailed, setThumbnailFailed] = useState(false);
+  const validation = getDocumentReanalysisValidation(doc, pages);
 
   useEffect(() => {
     let cancelled = false;
@@ -262,7 +309,23 @@ function DocumentRow({
   }, [firstImagePage?.page_id, fallbackThumbnailSrc]);
 
   return (
-    <article className="document-asset-row" role="listitem" aria-label={doc.original_filename}>
+    <article
+      className="document-asset-row media-asset-row"
+      role="listitem"
+      aria-label={doc.original_filename}
+      id={`media-${doc.document_id}`}
+    >
+      <label className="media-select-box">
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={(event) => onSelectedChange(event.target.checked)}
+          disabled={Boolean(validation.disabledReason)}
+          aria-label={`选择 ${doc.original_filename} 用于重分析`}
+        />
+        <span>选择</span>
+      </label>
+
       <button
         type="button"
         className="document-thumb-button"
@@ -333,6 +396,10 @@ function DocumentRow({
           ) : null}
         </div>
 
+        {validation.disabledReason ? (
+          <p className="media-disabled-reason">不可重分析：{validation.disabledReason}</p>
+        ) : null}
+
         {isImporting ? (
           <div className="document-inline-progress" aria-label={`导入进度 ${boundedProgress(job.progress)}%`}>
             <span
@@ -348,61 +415,70 @@ function DocumentRow({
 
         {job?.last_event_message || doc.error_summary || pages.length > 0 ? (
           <div className="document-row-detail">
-          {job?.last_event_message ? (
-            <p className="job-event">{job.last_event_message}</p>
-          ) : null}
-          {doc.error_summary ? (
-            <p className="job-error">失败原因：{doc.error_summary}</p>
-          ) : null}
-          {pages.length > 0 ? (
-            <details className="document-pages-detail">
-              <summary>页面详情（{pages.length}）</summary>
-              <div className="page-list">
-                {pages.map((page) => (
-                  <div key={page.page_id} className="page-item">
-                    <div className="page-item-main">
-                      <span>第 {page.page_number} 页</span>
-                      {page.error_summary ? (
-                        <span className="page-error-summary">
-                          {page.error_summary}
-                        </span>
+            {job?.last_event_message ? (
+              <p className="job-event">{job.last_event_message}</p>
+            ) : null}
+            {doc.error_summary ? (
+              <p className="job-error">失败原因：{doc.error_summary}</p>
+            ) : null}
+            {pages.length > 0 ? (
+              <details className="document-pages-detail">
+                <summary>页面详情（{pages.length}）</summary>
+                <div className="page-list">
+                  {pages.map((page) => (
+                    <div key={page.page_id} className="page-item">
+                      <div className="page-item-main">
+                        <span>第 {page.page_number} 页</span>
+                        {page.error_summary ? (
+                          <span className="page-error-summary">
+                            {page.error_summary}
+                          </span>
+                        ) : null}
+                      </div>
+                      <StatusBadge tone={pageStatusTone(page.status)}>
+                        {pageStatusLabel(page.status)}
+                      </StatusBadge>
+                      {onOpenDocumentImage ? (
+                        <Button
+                          variant="secondary"
+                          className="document-row-button"
+                          onClick={() => onOpenDocumentImage(page)}
+                          disabled={!page.image_path}
+                          title={
+                            page.image_path
+                              ? "打开此页在 pages 目录中的图片"
+                              : "此页面图片不可用"
+                          }
+                        >
+                          查看页面
+                        </Button>
+                      ) : null}
+                      {onReanalysisRequest ? (
+                        <Button
+                          variant="secondary"
+                          className="document-row-button"
+                          onClick={() =>
+                            onReanalysisRequest({
+                              kind: "page",
+                              ids: [page.page_id],
+                              label: `${doc.original_filename} 第 ${page.page_number} 页`,
+                              disabledReason: getPageReanalysisReason(page),
+                            })
+                          }
+                          disabled={Boolean(getPageReanalysisReason(page))}
+                          title={getPageReanalysisReason(page) ?? "进入模型分析处理此页"}
+                        >
+                          重分析此页
+                        </Button>
+                      ) : null}
+                      {page.status === "analyzed" && page.analysis_summary ? (
+                        <PageAnalysisSummaryBlock summary={page.analysis_summary} />
                       ) : null}
                     </div>
-                    <StatusBadge tone={pageStatusTone(page.status)}>
-                      {pageStatusLabel(page.status)}
-                    </StatusBadge>
-                    {onOpenDocumentImage ? (
-                      <Button
-                        variant="secondary"
-                        className="document-row-button"
-                        onClick={() => onOpenDocumentImage(page)}
-                        disabled={!page.image_path}
-                        title={
-                          page.image_path
-                            ? "打开此页在 pages 目录中的图片"
-                            : "此页面图片不可用"
-                        }
-                      >
-                        查看图片
-                      </Button>
-                    ) : null}
-                    {page.status === "analyzed" && page.analysis_summary ? (
-                      <PageAnalysisSummaryBlock summary={page.analysis_summary} />
-                    ) : null}
-                    {onAnalyzePage && canAnalyzePage(page.status) ? (
-                      <Button
-                        variant="secondary"
-                        onClick={() => onAnalyzePage(page.page_id)}
-                        disabled={analyzingPageId === page.page_id}
-                      >
-                        {pageActionLabel(page.status, analyzingPageId === page.page_id)}
-                      </Button>
-                    ) : null}
-                  </div>
-                ))}
-              </div>
-            </details>
-          ) : null}
+                  ))}
+                </div>
+              </details>
+            ) : null}
           </div>
         ) : null}
       </div>
@@ -427,26 +503,22 @@ function DocumentRow({
             查看页面
           </Button>
         ) : null}
-        {onReanalyzeFailedPages && failedPageCount > 0 ? (
+        {onReanalysisRequest ? (
           <Button
             variant="secondary"
             className="document-row-button"
-            onClick={() => onReanalyzeFailedPages(doc.document_id)}
-            disabled={isReanalyzingFailed}
-            title="重新分析此文档中的失败页面"
+            onClick={() =>
+              onReanalysisRequest({
+                kind: "document",
+                ids: [doc.document_id],
+                label: doc.original_filename,
+                disabledReason: validation.disabledReason,
+              })
+            }
+            disabled={Boolean(validation.disabledReason)}
+            title={validation.disabledReason ?? "进入模型分析处理此媒体"}
           >
-            {isReanalyzingFailed ? "重分析中" : "重试失败页"}
-          </Button>
-        ) : null}
-        {onReanalyzeDocument && doc.status === "ready" ? (
-          <Button
-            variant="secondary"
-            className="document-row-button"
-            onClick={() => onReanalyzeDocument(doc.document_id)}
-            disabled={isReanalyzing}
-            title="重新分析此文档"
-          >
-            {isReanalyzing ? "重分析中" : "重分析"}
+            重分析
           </Button>
         ) : null}
         {isFailed && onRetry ? (
@@ -554,6 +626,36 @@ function PageAnalysisSummaryBlock({
   );
 }
 
+function getDocumentReanalysisValidation(doc: DocumentDto, pages: PageWorkbenchDto[]) {
+  if (doc.status === "failed") {
+    return { disabledReason: "导入失败的媒体需先重试导入。" };
+  }
+  if (pages.length === 0) {
+    return { disabledReason: "没有可查询的页面记录。" };
+  }
+  if (!pages.some((page) => page.image_path)) {
+    return { disabledReason: "还没有生成页面图片。" };
+  }
+  if (!pages.some((page) => canReanalyzePage(page))) {
+    return { disabledReason: "没有可分析或可重分析的页面。" };
+  }
+  return { disabledReason: null };
+}
+
+function getPageReanalysisReason(page: PageWorkbenchDto) {
+  if (!page.image_path) {
+    return "此页还没有页面图片。";
+  }
+  if (!canReanalyzePage(page)) {
+    return "此页状态暂不可重分析。";
+  }
+  return null;
+}
+
+function canReanalyzePage(page: PageWorkbenchDto) {
+  return page.status === "rendered" || page.status === "failed" || page.status === "analyzed";
+}
+
 function resolvePageImageSrc(
   imagePath: string | null | undefined,
   workspacePath: string | null | undefined,
@@ -591,24 +693,45 @@ function resolveWorkspacePath(
   return `${root}${separator}${normalized.replace(/\//g, separator)}`;
 }
 
-function filterDocuments(documents: DocumentDto[], query: string) {
+function filterDocuments(
+  documents: DocumentDto[],
+  pagesByDocument: Record<string, PageWorkbenchDto[]>,
+  query: string,
+  statusFilter: MediaStatusFilter,
+) {
   const normalized = query.trim().toLocaleLowerCase("zh-CN");
-  if (!normalized) {
-    return documents;
-  }
+  return documents.filter((doc) => {
+    const pages = pagesByDocument[doc.document_id] ?? [];
+    const matchesQuery =
+      !normalized ||
+      [
+        doc.original_filename,
+        doc.original_path,
+        doc.file_type,
+        statusLabel(doc.status),
+        doc.status,
+      ]
+        .join(" ")
+        .toLocaleLowerCase("zh-CN")
+        .includes(normalized);
+    if (!matchesQuery) {
+      return false;
+    }
 
-  return documents.filter((doc) =>
-    [
-      doc.original_filename,
-      doc.original_path,
-      doc.file_type,
-      statusLabel(doc.status),
-      doc.status,
-    ]
-      .join(" ")
-      .toLocaleLowerCase("zh-CN")
-      .includes(normalized),
-  );
+    switch (statusFilter) {
+      case "ready":
+        return doc.status === "ready";
+      case "failed":
+        return doc.status === "failed";
+      case "has_failed_pages":
+        return doc.analysis_failed_pages > 0 || pages.some((page) => page.status === "failed");
+      case "needs_analysis":
+        return pages.some((page) => page.status === "rendered");
+      case "all":
+      default:
+        return true;
+    }
+  });
 }
 
 function truncateText(text: string, maxLen: number) {
@@ -623,23 +746,6 @@ function boundedProgress(progress: number) {
     return 0;
   }
   return Math.min(100, Math.max(0, Math.round(progress)));
-}
-
-function canAnalyzePage(status: string) {
-  return status === "rendered" || status === "failed" || status === "analyzed";
-}
-
-function pageActionLabel(status: string, isAnalyzing: boolean) {
-  if (isAnalyzing) {
-    return "分析中...";
-  }
-  if (status === "failed") {
-    return "重试此页";
-  }
-  if (status === "analyzed") {
-    return "重新分析此页";
-  }
-  return "分析此页";
 }
 
 function pageStatusLabel(status: string) {

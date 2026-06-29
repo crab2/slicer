@@ -28,10 +28,11 @@ use commands::search_commands::{
     get_index_status, get_page_image_preview, search_pages, start_index_rebuild,
 };
 use commands::settings_commands::{
-    accept_privacy_notice, activate_api_key, add_api_key, delete_api_key, delete_api_key_record,
-    delete_provider_api_key, find_libreoffice_path, get_app_settings,
-    get_model_configuration_status, get_privacy_notice_status, list_api_keys, list_openai_models,
-    save_api_key, save_app_settings, save_provider_api_key,
+    accept_privacy_notice, activate_api_key, activate_model_profile, add_api_key, delete_api_key,
+    delete_api_key_record, delete_model_profile, delete_provider_api_key, find_libreoffice_path,
+    get_app_settings, get_model_configuration_status, get_privacy_notice_status, list_api_keys,
+    list_model_profiles, list_openai_models, save_api_key, save_app_settings,
+    save_provider_api_key, upsert_model_profile,
 };
 use commands::workspace_commands::{get_workspace_status, select_workspace};
 use services::api_server_service::ApiServerService;
@@ -95,6 +96,10 @@ pub fn run() {
             delete_api_key_record,
             delete_api_key,
             delete_provider_api_key,
+            list_model_profiles,
+            upsert_model_profile,
+            activate_model_profile,
+            delete_model_profile,
             get_model_configuration_status,
             list_openai_models,
             get_privacy_notice_status,

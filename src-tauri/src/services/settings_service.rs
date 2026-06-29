@@ -1,6 +1,6 @@
 use crate::domain::settings::{
-    ApiKeyListDto, ApiKeyRecordDto, AppSettingsDto, ModelConfigurationStatusDto,
-    PrivacyNoticeStatusDto,
+    ApiKeyListDto, ApiKeyRecordDto, AppSettingsDto, ModelConfigurationStatusDto, ModelProfileDto,
+    ModelProfileListDto, ModelProfileUpsertRequestDto, PrivacyNoticeStatusDto,
 };
 use crate::errors::{AppError, AppResult};
 use crate::repositories::workspace_settings_repository::WorkspaceSettingsRepository;
@@ -13,6 +13,8 @@ use uuid::Uuid;
 pub struct SettingsService;
 
 impl SettingsService {
+    const MAX_MODEL_PROFILES: usize = 10;
+
     pub fn get_settings(workspace: &WorkspaceService) -> AppResult<AppSettingsDto> {
         let status = workspace.get_workspace_status();
         if status.status == "error" {
@@ -32,10 +34,19 @@ impl SettingsService {
             workspace.settings_repository().load_app_settings()?
         };
 
+        if status.status == "ready" {
+            Self::normalize_model_profiles(workspace, &mut settings, true)?;
+        }
         settings.model_provider = Self::normalized_model_provider(&settings);
         settings.workspace_path = status.workspace_path;
-        settings.api_key_configured =
-            Self::active_api_key_configured_for_provider(workspace, &settings.model_provider)?;
+        if !settings
+            .model_profiles
+            .iter()
+            .any(|profile| profile.is_active)
+        {
+            settings.api_key_configured =
+                Self::active_api_key_configured_for_provider(workspace, &settings.model_provider)?;
+        }
         Ok(settings)
     }
 
@@ -46,6 +57,7 @@ impl SettingsService {
     ) -> AppResult<()> {
         let mut normalized_settings = settings.clone();
         normalized_settings.model_provider = Self::normalized_model_provider(settings);
+        Self::normalize_model_profiles(workspace, &mut normalized_settings, false)?;
         Self::validate_settings(&normalized_settings)?;
 
         let status = workspace.get_workspace_status();
@@ -70,6 +82,192 @@ impl SettingsService {
 
         api_server.reconcile(&normalized_settings)?;
         Ok(())
+    }
+
+    pub fn list_model_profiles(workspace: &WorkspaceService) -> AppResult<ModelProfileListDto> {
+        let settings = Self::get_settings(workspace)?;
+        Ok(ModelProfileListDto {
+            profiles: settings.model_profiles,
+            max_profiles: Self::MAX_MODEL_PROFILES,
+        })
+    }
+
+    pub fn upsert_model_profile(
+        workspace: &WorkspaceService,
+        api_server: &ApiServerService,
+        request: &ModelProfileUpsertRequestDto,
+    ) -> AppResult<ModelProfileListDto> {
+        let mut settings = Self::get_settings(workspace)?;
+        let mut profiles = settings.model_profiles.clone();
+        let provider = Self::normalized_provider_name(&request.provider);
+        Self::validate_provider_name(&provider)?;
+
+        let now = Utc::now().to_rfc3339();
+        let existing_index = request.profile_id.as_ref().and_then(|id| {
+            profiles
+                .iter()
+                .position(|profile| &profile.profile_id == id)
+        });
+        if existing_index.is_none() && profiles.len() >= Self::MAX_MODEL_PROFILES {
+            return Err(AppError::new(
+                "model_profile_limit_reached",
+                "最多只能保存 10 个模型配置。",
+                "settings",
+                true,
+            ));
+        }
+
+        let api_key = request.api_key.as_deref().unwrap_or("").trim();
+        let existing = existing_index.and_then(|index| profiles.get(index).cloned());
+        let mut key_id = existing.as_ref().and_then(|profile| profile.key_id.clone());
+        if !api_key.is_empty() {
+            let next_key_id = key_id.unwrap_or_else(|| Uuid::new_v4().to_string());
+            security::store_api_key_for_id(&next_key_id, api_key)?;
+            key_id = Some(next_key_id);
+        }
+
+        if Self::provider_requires_api_key(&provider) && key_id.is_none() {
+            return Err(AppError::new(
+                "api_key_missing",
+                "请为模型配置填写 API Key。",
+                "settings",
+                true,
+            ));
+        }
+
+        let key_label = Self::normalized_profile_key_label(
+            &request.api_key_label,
+            &request.label,
+            &request.model_name,
+            &provider,
+        );
+        if let Some(id) = key_id.as_deref() {
+            Self::upsert_profile_api_key_record(workspace, &provider, id, &key_label)?;
+        }
+
+        let label = Self::normalized_profile_label(&request.label, &request.model_name, &provider);
+        let should_activate = request.activate
+            || profiles.is_empty()
+            || existing.as_ref().is_some_and(|profile| profile.is_active);
+        let profile = ModelProfileDto {
+            profile_id: existing
+                .as_ref()
+                .map(|profile| profile.profile_id.clone())
+                .or_else(|| request.profile_id.clone())
+                .filter(|id| !id.trim().is_empty())
+                .unwrap_or_else(|| Uuid::new_v4().to_string()),
+            label,
+            provider,
+            base_url: request.base_url.trim().to_string(),
+            custom_endpoint: request.custom_endpoint.trim().to_string(),
+            model_name: request.model_name.trim().to_string(),
+            key_id,
+            key_label: Some(key_label),
+            api_key_configured: false,
+            is_active: should_activate,
+            created_at: existing
+                .as_ref()
+                .map(|profile| profile.created_at.clone())
+                .filter(|value| !value.is_empty())
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+        };
+
+        if let Some(index) = existing_index {
+            profiles[index] = profile;
+        } else {
+            profiles.push(profile);
+        }
+        if should_activate {
+            let active_id = profiles
+                .iter()
+                .find(|candidate| candidate.is_active)
+                .map(|candidate| candidate.profile_id.clone());
+            if let Some(active_id) = active_id {
+                for item in &mut profiles {
+                    item.is_active = item.profile_id == active_id;
+                }
+            }
+        }
+
+        settings.model_profiles = profiles;
+        Self::normalize_model_profiles(workspace, &mut settings, false)?;
+        Self::save_settings(workspace, api_server, &settings)?;
+        Self::list_model_profiles(workspace)
+    }
+
+    pub fn activate_model_profile(
+        workspace: &WorkspaceService,
+        api_server: &ApiServerService,
+        profile_id: &str,
+    ) -> AppResult<ModelProfileListDto> {
+        let mut settings = Self::get_settings(workspace)?;
+        if !settings
+            .model_profiles
+            .iter()
+            .any(|profile| profile.profile_id == profile_id)
+        {
+            return Err(AppError::new(
+                "model_profile_not_found",
+                "模型配置不存在。",
+                "settings",
+                true,
+            ));
+        }
+        for profile in &mut settings.model_profiles {
+            profile.is_active = profile.profile_id == profile_id;
+        }
+        Self::normalize_model_profiles(workspace, &mut settings, false)?;
+        Self::save_settings(workspace, api_server, &settings)?;
+        Self::list_model_profiles(workspace)
+    }
+
+    pub fn delete_model_profile(
+        workspace: &WorkspaceService,
+        api_server: &ApiServerService,
+        profile_id: &str,
+    ) -> AppResult<ModelProfileListDto> {
+        let mut settings = Self::get_settings(workspace)?;
+        let removed = settings
+            .model_profiles
+            .iter()
+            .find(|profile| profile.profile_id == profile_id)
+            .cloned()
+            .ok_or_else(|| {
+                AppError::new(
+                    "model_profile_not_found",
+                    "模型配置不存在。",
+                    "settings",
+                    true,
+                )
+            })?;
+        settings
+            .model_profiles
+            .retain(|profile| profile.profile_id != profile_id);
+        if let Some(key_id) = removed.key_id.as_deref() {
+            if !settings
+                .model_profiles
+                .iter()
+                .any(|profile| profile.key_id.as_deref() == Some(key_id))
+            {
+                let _ = security::delete_api_key_for_id(key_id);
+                Self::remove_api_key_record_by_id(workspace, key_id)?;
+            }
+        }
+        if removed.is_active {
+            if let Some(first) = settings.model_profiles.first_mut() {
+                first.is_active = true;
+            } else {
+                settings.model_provider = "openai".to_string();
+                settings.base_url.clear();
+                settings.custom_endpoint.clear();
+                settings.model_name.clear();
+                settings.api_key_configured = false;
+            }
+        }
+        Self::normalize_model_profiles(workspace, &mut settings, false)?;
+        Self::save_settings(workspace, api_server, &settings)?;
+        Self::list_model_profiles(workspace)
     }
 
     pub fn save_api_key(key: &str) -> AppResult<()> {
@@ -241,16 +439,36 @@ impl SettingsService {
                     "settings",
                     true,
                 )
-                .with_details(format!(
-                    "provider={}; key_id={}",
-                    provider, active.key_id
-                )));
+                .with_details(format!("provider={}; key_id={}", provider, active.key_id)));
             };
             security::store_api_key_for_provider(&provider, &secret)?;
             return Ok(Some(secret));
         }
 
         security::read_api_key_for_provider(&provider)
+    }
+
+    pub fn read_api_key_for_model_profile(
+        workspace: &WorkspaceService,
+        profile_id: &str,
+    ) -> AppResult<Option<String>> {
+        let settings = Self::get_settings(workspace)?;
+        let Some(profile) = settings
+            .model_profiles
+            .iter()
+            .find(|candidate| candidate.profile_id == profile_id)
+        else {
+            return Err(AppError::new(
+                "model_profile_not_found",
+                "模型配置不存在。",
+                "settings",
+                true,
+            ));
+        };
+        let Some(key_id) = profile.key_id.as_deref() else {
+            return Ok(None);
+        };
+        security::read_api_key_for_id(key_id)
     }
 
     pub fn get_libreoffice_path(workspace: &WorkspaceService) -> AppResult<String> {
@@ -329,6 +547,193 @@ impl SettingsService {
         settings.apply_workspace_record(record);
         settings.libreoffice_path = global.libreoffice_path;
         Ok(settings)
+    }
+
+    fn normalize_model_profiles(
+        workspace: &WorkspaceService,
+        settings: &mut AppSettingsDto,
+        _persist_changes: bool,
+    ) -> AppResult<()> {
+        let now = Utc::now().to_rfc3339();
+        for profile in &mut settings.model_profiles {
+            profile.provider = Self::normalized_provider_name(&profile.provider);
+            profile.label = profile.label.trim().to_string();
+            profile.base_url = profile.base_url.trim().to_string();
+            profile.custom_endpoint = profile.custom_endpoint.trim().to_string();
+            profile.model_name = profile.model_name.trim().to_string();
+            if profile.profile_id.trim().is_empty() {
+                profile.profile_id = Uuid::new_v4().to_string();
+            }
+            if profile.label.is_empty() {
+                profile.label =
+                    Self::normalized_profile_label("", &profile.model_name, &profile.provider);
+            }
+            if profile.created_at.is_empty() {
+                profile.created_at = now.clone();
+            }
+            if profile.updated_at.is_empty() {
+                profile.updated_at = profile.created_at.clone();
+            }
+            profile.api_key_configured =
+                Self::profile_api_key_configured(profile.key_id.as_deref())?;
+        }
+
+        if settings.model_profiles.is_empty() && !settings.model_name.trim().is_empty() {
+            settings
+                .model_profiles
+                .push(Self::legacy_profile_from_settings(workspace, settings)?);
+        }
+
+        let mut active_seen = false;
+        for profile in &mut settings.model_profiles {
+            if profile.is_active {
+                if active_seen {
+                    profile.is_active = false;
+                } else {
+                    active_seen = true;
+                }
+            }
+        }
+        if !active_seen {
+            if let Some(first) = settings.model_profiles.first_mut() {
+                first.is_active = true;
+            }
+        }
+
+        if let Some(active) = settings
+            .model_profiles
+            .iter()
+            .find(|profile| profile.is_active)
+            .cloned()
+        {
+            settings.model_provider = active.provider.clone();
+            settings.base_url = active.base_url.clone();
+            settings.custom_endpoint = active.custom_endpoint.clone();
+            settings.model_name = active.model_name.clone();
+            settings.api_key_configured = active.api_key_configured;
+            if let Some(key_id) = active.key_id.as_deref() {
+                if let Some(secret) = security::read_api_key_for_id(key_id)? {
+                    security::store_api_key_for_provider(&active.provider, &secret)?;
+                }
+                Self::set_active_api_key_record(workspace, &active.provider, key_id)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    fn legacy_profile_from_settings(
+        workspace: &WorkspaceService,
+        settings: &AppSettingsDto,
+    ) -> AppResult<ModelProfileDto> {
+        let provider = Self::normalized_model_provider(settings);
+        let active_key = Self::migrated_api_key_list(workspace)?
+            .keys
+            .into_iter()
+            .find(|key| key.provider == provider && key.is_active);
+        let key_id = active_key.as_ref().map(|key| key.key_id.clone());
+        let key_label = active_key.as_ref().map(|key| key.label.clone());
+        let now = Utc::now().to_rfc3339();
+        Ok(ModelProfileDto {
+            profile_id: "legacy-active-model".to_string(),
+            label: Self::normalized_profile_label("", &settings.model_name, &provider),
+            provider,
+            base_url: settings.base_url.trim().to_string(),
+            custom_endpoint: settings.custom_endpoint.trim().to_string(),
+            model_name: settings.model_name.trim().to_string(),
+            api_key_configured: Self::profile_api_key_configured(key_id.as_deref())?,
+            key_id,
+            key_label,
+            is_active: true,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    fn profile_api_key_configured(key_id: Option<&str>) -> AppResult<bool> {
+        let Some(key_id) = key_id else {
+            return Ok(false);
+        };
+        match security::read_api_key_for_id(key_id) {
+            Ok(secret) => Ok(secret.is_some()),
+            Err(err) if err.code == "api_key_looks_like_url" => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
+
+    fn normalized_profile_label(label: &str, model_name: &str, provider: &str) -> String {
+        let label = label.trim();
+        if !label.is_empty() {
+            return label.to_string();
+        }
+        let model_name = model_name.trim();
+        if !model_name.is_empty() {
+            return model_name.to_string();
+        }
+        format!("{} model", provider)
+    }
+
+    fn normalized_profile_key_label(
+        key_label: &str,
+        label: &str,
+        model_name: &str,
+        provider: &str,
+    ) -> String {
+        let key_label = key_label.trim();
+        if !key_label.is_empty() {
+            return key_label.to_string();
+        }
+        format!(
+            "{} API Key",
+            Self::normalized_profile_label(label, model_name, provider)
+        )
+    }
+
+    fn upsert_profile_api_key_record(
+        workspace: &WorkspaceService,
+        provider: &str,
+        key_id: &str,
+        label: &str,
+    ) -> AppResult<()> {
+        let mut list = Self::migrated_api_key_list(workspace)?.keys;
+        let now = Utc::now().to_rfc3339();
+        if let Some(existing) = list.iter_mut().find(|item| item.key_id == key_id) {
+            existing.provider = provider.to_string();
+            existing.label = label.to_string();
+            existing.updated_at = now;
+        } else {
+            list.push(ApiKeyRecordDto {
+                key_id: key_id.to_string(),
+                provider: provider.to_string(),
+                label: label.to_string(),
+                is_active: false,
+                created_at: now.clone(),
+                updated_at: now,
+            });
+        }
+        workspace.settings_repository().save_api_key_list(&list)
+    }
+
+    fn remove_api_key_record_by_id(workspace: &WorkspaceService, key_id: &str) -> AppResult<()> {
+        let mut list = Self::migrated_api_key_list(workspace)?.keys;
+        list.retain(|item| item.key_id != key_id);
+        workspace.settings_repository().save_api_key_list(&list)
+    }
+
+    fn set_active_api_key_record(
+        workspace: &WorkspaceService,
+        provider: &str,
+        key_id: &str,
+    ) -> AppResult<()> {
+        let mut list = Self::migrated_api_key_list(workspace)?.keys;
+        let now = Utc::now().to_rfc3339();
+        for item in &mut list {
+            if item.provider == provider {
+                item.is_active = item.key_id == key_id;
+                item.updated_at = now.clone();
+            }
+        }
+        workspace.settings_repository().save_api_key_list(&list)
     }
 
     fn maybe_migrate_global_settings(
@@ -757,6 +1162,88 @@ mod tests {
                 .expect("secret");
 
         assert_eq!(secret, "sk-test-openai");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn model_profiles_can_be_added_activated_and_deleted() {
+        let (service, root) = test_workspace();
+        let api = ApiServerService::new(test_state(&root.join("config")));
+
+        let first = SettingsService::upsert_model_profile(
+            &service,
+            &api,
+            &ModelProfileUpsertRequestDto {
+                profile_id: None,
+                label: "first".to_string(),
+                provider: "openai".to_string(),
+                base_url: "https://api.one.example".to_string(),
+                custom_endpoint: String::new(),
+                model_name: "gpt-one".to_string(),
+                api_key_label: "first key".to_string(),
+                api_key: Some("sk-first".to_string()),
+                activate: true,
+            },
+        )
+        .expect("first profile");
+        assert_eq!(first.profiles.len(), 1);
+        assert!(first.profiles[0].is_active);
+
+        let second = SettingsService::upsert_model_profile(
+            &service,
+            &api,
+            &ModelProfileUpsertRequestDto {
+                profile_id: None,
+                label: "second".to_string(),
+                provider: "openai".to_string(),
+                base_url: "https://api.two.example".to_string(),
+                custom_endpoint: String::new(),
+                model_name: "gpt-two".to_string(),
+                api_key_label: "second key".to_string(),
+                api_key: Some("sk-second".to_string()),
+                activate: false,
+            },
+        )
+        .expect("second profile");
+        assert_eq!(second.profiles.len(), 2);
+        assert_eq!(
+            second
+                .profiles
+                .iter()
+                .find(|profile| profile.is_active)
+                .expect("active")
+                .label,
+            "first"
+        );
+
+        let second_id = second
+            .profiles
+            .iter()
+            .find(|profile| profile.label == "second")
+            .expect("second")
+            .profile_id
+            .clone();
+        let activated =
+            SettingsService::activate_model_profile(&service, &api, &second_id).expect("activate");
+        assert_eq!(
+            activated
+                .profiles
+                .iter()
+                .find(|profile| profile.is_active)
+                .expect("active")
+                .label,
+            "second"
+        );
+        let settings = SettingsService::get_settings(&service).expect("settings");
+        assert_eq!(settings.model_name, "gpt-two");
+        assert_eq!(settings.base_url, "https://api.two.example");
+
+        let remaining =
+            SettingsService::delete_model_profile(&service, &api, &second_id).expect("delete");
+        assert_eq!(remaining.profiles.len(), 1);
+        assert!(remaining.profiles[0].is_active);
+        assert_eq!(remaining.profiles[0].label, "first");
 
         let _ = fs::remove_dir_all(root);
     }

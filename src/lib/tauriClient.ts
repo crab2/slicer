@@ -9,6 +9,8 @@ import type {
   AppErrorDto,
   AppSettingsDto,
   ModelConfigurationStatusDto,
+  ModelProfileListDto,
+  ModelProfileUpsertRequestDto,
   PrivacyNoticeStatusDto,
   CoreStatusCatalogDto,
   CreateJobRequestDto,
@@ -32,6 +34,7 @@ import {
   isDocumentFileType,
   isImageFileType,
   isSupportedFileType,
+  SUPPORTED_EXTENSIONS,
 } from "./fileValidation";
 
 export type TauriCommandArgs = Record<string, unknown>;
@@ -95,6 +98,18 @@ export const tauriClient = {
     });
     return selected;
   },
+  openMediaImportDialog: async () => {
+    const selected = await open({
+      multiple: true,
+      filters: [
+        {
+          name: "媒体",
+          extensions: SUPPORTED_EXTENSIONS.map((ext) => ext.slice(1)),
+        },
+      ],
+    });
+    return selected;
+  },
   openImageImportDialog: async () => {
     const selected = await open({
       multiple: true,
@@ -127,10 +142,18 @@ export const tauriClient = {
   deleteApiKey: () => callTauriCommand<void>("delete_api_key"),
   deleteProviderApiKey: (provider: string) =>
     callTauriCommand<void>("delete_provider_api_key", { provider }),
+  listModelProfiles: () =>
+    callTauriCommand<ModelProfileListDto>("list_model_profiles"),
+  upsertModelProfile: (request: ModelProfileUpsertRequestDto) =>
+    callTauriCommand<ModelProfileListDto>("upsert_model_profile", { request }),
+  activateModelProfile: (profileId: string) =>
+    callTauriCommand<ModelProfileListDto>("activate_model_profile", { profileId }),
+  deleteModelProfile: (profileId: string) =>
+    callTauriCommand<ModelProfileListDto>("delete_model_profile", { profileId }),
   getModelConfigurationStatus: () =>
     callTauriCommand<ModelConfigurationStatusDto>("get_model_configuration_status"),
-  listOpenAIModels: (settings: AppSettingsDto) =>
-    callTauriCommand<ModelListDto>("list_openai_models", { settings }),
+  listOpenAIModels: (settings: AppSettingsDto, apiKey?: string | null, profileId?: string | null) =>
+    callTauriCommand<ModelListDto>("list_openai_models", { settings, apiKey, profileId }),
   getPrivacyNoticeStatus: () =>
     callTauriCommand<PrivacyNoticeStatusDto>("get_privacy_notice_status"),
   acceptPrivacyNotice: () => callTauriCommand<void>("accept_privacy_notice"),

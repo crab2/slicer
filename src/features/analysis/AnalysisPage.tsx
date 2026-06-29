@@ -1,11 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Button } from "../../components/common/Button";
 import { ErrorMessage } from "../../components/common/ErrorMessage";
 import { StatusBadge } from "../../components/common/StatusBadge";
 import { PrivacyNotice } from "../settings/components/PrivacyNotice";
 import { tauriClient } from "../../lib/tauriClient";
+import type { NavigationContext } from "../../app/navigation";
 import type {
   AnalysisBatchResultDto,
+  AnalysisResultDto,
   DocumentDto,
   ModelConfigurationStatusDto,
   PageWorkbenchDto,
@@ -14,13 +16,27 @@ import type {
 interface AnalysisPageProps {
   workspaceReady: boolean;
   isActive: boolean;
+  navigationContext: NavigationContext | null;
   onOpenSettings: () => void;
+  onReturnToSource: () => void;
+}
+
+interface ReanalysisSummary {
+  selectedKind: string;
+  selectionCount: number;
+  sourceTab: string;
+  selectedLabels: string[];
+  analyzablePages: number;
+  existingJsonPages: number;
+  failedItems: number;
 }
 
 export function AnalysisPage({
   workspaceReady,
   isActive,
+  navigationContext,
   onOpenSettings,
+  onReturnToSource,
 }: AnalysisPageProps) {
   const [modelStatus, setModelStatus] = useState<ModelConfigurationStatusDto | null>(null);
   const [isModelStatusLoading, setIsModelStatusLoading] = useState(false);
@@ -29,11 +45,19 @@ export function AnalysisPage({
   const [analysisReadyMessage, setAnalysisReadyMessage] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<{ message: string; correlationId?: string | null } | null>(null);
   const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
-  const [pendingBatchAction, setPendingBatchAction] = useState<"new-pages" | null>(null);
+  const [isReanalyzing, setIsReanalyzing] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"new-pages" | "reanalysis" | null>(null);
   const [documents, setDocuments] = useState<DocumentDto[]>([]);
   const [pagesByDocument, setPagesByDocument] = useState<Record<string, PageWorkbenchDto[]>>({});
 
   const analysisStats = computeAnalysisStats(documents, pagesByDocument);
+  const reanalysisSummary = useMemo(
+    () =>
+      navigationContext?.action === "reanalyze"
+        ? buildReanalysisSummary(navigationContext, documents, pagesByDocument)
+        : null,
+    [navigationContext, documents, pagesByDocument],
+  );
   const analysisConfigured =
     modelStatus?.configured &&
     (!modelStatus.requires_privacy_notice || modelStatus.privacy_notice_accepted);
@@ -50,7 +74,11 @@ export function AnalysisPage({
   }
 
   async function refreshDocuments() {
-    if (!workspaceReady) return;
+    if (!workspaceReady) {
+      setDocuments([]);
+      setPagesByDocument({});
+      return;
+    }
     try {
       const docs = await tauriClient.listDocuments();
       setDocuments(docs);
@@ -65,22 +93,27 @@ export function AnalysisPage({
       setPagesByDocument(pagesMap);
     } catch {
       setDocuments([]);
+      setPagesByDocument({});
     }
   }
 
   useEffect(() => {
-    if (!workspaceReady || !isActive) return;
+    if (!workspaceReady || !isActive) {
+      return;
+    }
     void refreshModelStatus();
     void refreshDocuments();
-  }, [workspaceReady, isActive]);
+  }, [workspaceReady, isActive, navigationContext]);
 
   useEffect(() => {
-    if (!workspaceReady || !isActive || !isBatchAnalyzing) return;
+    if (!workspaceReady || !isActive || (!isBatchAnalyzing && !isReanalyzing)) {
+      return;
+    }
     const timer = window.setInterval(() => {
       void refreshDocuments();
     }, 2000);
     return () => window.clearInterval(timer);
-  }, [workspaceReady, isActive, isBatchAnalyzing]);
+  }, [workspaceReady, isActive, isBatchAnalyzing, isReanalyzing]);
 
   async function handleAnalysisEntry() {
     setAnalysisError(null);
@@ -90,11 +123,29 @@ export function AnalysisPage({
       return;
     }
     if (modelStatus.requires_privacy_notice && !modelStatus.privacy_notice_accepted) {
-      setPendingBatchAction("new-pages");
+      setPendingAction("new-pages");
       setShowPrivacyNotice(true);
       return;
     }
     await executeAnalyzeNewPages();
+  }
+
+  async function handleDefaultReanalysis() {
+    setAnalysisError(null);
+    setAnalysisReadyMessage(null);
+    if (!navigationContext || navigationContext.action !== "reanalyze") {
+      return;
+    }
+    if (!modelStatus?.configured) {
+      onOpenSettings();
+      return;
+    }
+    if (modelStatus.requires_privacy_notice && !modelStatus.privacy_notice_accepted) {
+      setPendingAction("reanalysis");
+      setShowPrivacyNotice(true);
+      return;
+    }
+    await executeReanalysis();
   }
 
   async function executeAnalyzeNewPages() {
@@ -111,6 +162,35 @@ export function AnalysisPage({
     }
   }
 
+  async function executeReanalysis() {
+    if (!navigationContext || navigationContext.action !== "reanalyze") {
+      return;
+    }
+
+    setIsReanalyzing(true);
+    try {
+      if (navigationContext.selected_kind === "document" || navigationContext.selected_kind === "document_batch") {
+        const results: AnalysisBatchResultDto[] = [];
+        for (const documentId of navigationContext.selected_ids) {
+          results.push(await tauriClient.reanalyzeDocument(documentId));
+        }
+        setAnalysisReadyMessage(formatCombinedBatchMessage("默认重分析完成", results));
+      } else {
+        const results: AnalysisResultDto[] = [];
+        for (const pageId of navigationContext.selected_ids) {
+          results.push(await tauriClient.analyzePage(pageId));
+        }
+        setAnalysisReadyMessage(formatPageAnalysisMessage("页面重分析完成", results));
+      }
+      await refreshDocuments();
+    } catch (error) {
+      setAnalysisError(extractError(error));
+      await refreshDocuments();
+    } finally {
+      setIsReanalyzing(false);
+    }
+  }
+
   async function handlePrivacyConfirm() {
     setIsAcceptingPrivacy(true);
     try {
@@ -118,10 +198,14 @@ export function AnalysisPage({
       setShowPrivacyNotice(false);
       const status = await tauriClient.getModelConfigurationStatus();
       setModelStatus(status);
-      if (pendingBatchAction === "new-pages") {
+      const action = pendingAction;
+      setPendingAction(null);
+      if (action === "new-pages") {
         await executeAnalyzeNewPages();
+      } else if (action === "reanalysis") {
+        await executeReanalysis();
       } else {
-        setAnalysisReadyMessage("隐私提示已确认。可以开始批量分析。");
+        setAnalysisReadyMessage("隐私提示已确认。可以开始模型分析。");
       }
     } catch (error) {
       setAnalysisError(extractError(error));
@@ -139,7 +223,7 @@ export function AnalysisPage({
   }
 
   return (
-    <div className="page-grid">
+    <div className="page-grid analysis-page">
       <section className="panel panel-wide">
         <div className="panel-header">
           <div>
@@ -214,17 +298,186 @@ export function AnalysisPage({
         </div>
       </section>
 
+      {reanalysisSummary ? (
+        <ReanalysisContextSummary
+          summary={reanalysisSummary}
+          modelReady={Boolean(analysisConfigured)}
+          isRunning={isReanalyzing}
+          onDefaultReanalysis={() => void handleDefaultReanalysis()}
+          onReturn={onReturnToSource}
+          onOpenSettings={onOpenSettings}
+        />
+      ) : null}
+
       <PrivacyNotice
         open={showPrivacyNotice}
         onConfirm={() => void handlePrivacyConfirm()}
         onCancel={() => {
           setShowPrivacyNotice(false);
-          setPendingBatchAction(null);
+          setPendingAction(null);
         }}
         isSubmitting={isAcceptingPrivacy}
       />
     </div>
   );
+}
+
+function ReanalysisContextSummary({
+  summary,
+  modelReady,
+  isRunning,
+  onDefaultReanalysis,
+  onReturn,
+  onOpenSettings,
+}: {
+  summary: ReanalysisSummary;
+  modelReady: boolean;
+  isRunning: boolean;
+  onDefaultReanalysis: () => void;
+  onReturn: () => void;
+  onOpenSettings: () => void;
+}) {
+  return (
+    <section className="panel panel-wide reanalysis-context-panel">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">重分析上下文</p>
+          <h2>来自{summary.sourceTab}的选择</h2>
+          <p className="muted-copy">
+            已重新查询后端数据：{summary.selectedKind}，选择 {summary.selectionCount} 项，
+            预计可重分析 {summary.analyzablePages} 页，已有 JSON {summary.existingJsonPages} 页，
+            失败项 {summary.failedItems} 个。
+          </p>
+        </div>
+        <StatusBadge tone={summary.failedItems > 0 ? "warning" : "success"}>
+          {summary.selectionCount} 项
+        </StatusBadge>
+      </div>
+
+      <div className="reanalysis-summary-grid">
+        <SummaryItem label="对象类型" value={summary.selectedKind} />
+        <SummaryItem label="选择数量" value={`${summary.selectionCount}`} />
+        <SummaryItem label="待处理页" value={`${summary.analyzablePages}`} />
+        <SummaryItem label="已有 JSON" value={`${summary.existingJsonPages}`} />
+        <SummaryItem label="失败项" value={`${summary.failedItems}`} />
+      </div>
+
+      <div className="reanalysis-selected-list" aria-label="重分析选择对象">
+        {summary.selectedLabels.slice(0, 6).map((label) => (
+          <span key={label}>{label}</span>
+        ))}
+        {summary.selectedLabels.length > 6 ? (
+          <span>另有 {summary.selectedLabels.length - 6} 项</span>
+        ) : null}
+      </div>
+
+      <div className="action-row workbench-actions">
+        <Button
+          variant="primary"
+          onClick={onDefaultReanalysis}
+          disabled={!modelReady || isRunning || summary.analyzablePages === 0}
+        >
+          {isRunning ? "重分析中..." : "默认重分析"}
+        </Button>
+        <Button disabled title="后端自定义提示词重分析能力尚未接入">
+          自定义提示词
+        </Button>
+        <Button disabled title="可信 JSON 编辑/微调保存管线尚未接入">
+          JSON 编辑
+        </Button>
+        {!modelReady ? <Button onClick={onOpenSettings}>打开设置</Button> : null}
+        <Button onClick={onReturn}>返回媒体管理</Button>
+      </div>
+    </section>
+  );
+}
+
+function SummaryItem({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="reanalysis-summary-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function buildReanalysisSummary(
+  context: NavigationContext,
+  documents: DocumentDto[],
+  pagesByDocument: Record<string, PageWorkbenchDto[]>,
+): ReanalysisSummary {
+  const labels: string[] = [];
+  let analyzablePages = 0;
+  let existingJsonPages = 0;
+  let failedItems = 0;
+
+  if (context.selected_kind === "document" || context.selected_kind === "document_batch") {
+    for (const documentId of context.selected_ids) {
+      const doc = documents.find((item) => item.document_id === documentId);
+      const pages = pagesByDocument[documentId] ?? [];
+      labels.push(doc?.original_filename ?? documentId);
+      analyzablePages += pages.filter((page) => canAnalyzePage(page)).length;
+      existingJsonPages += pages.filter((page) => page.analysis_summary !== null).length;
+      failedItems += doc?.status === "failed" ? 1 : 0;
+      failedItems += pages.filter((page) => page.status === "failed").length;
+    }
+  } else {
+    const pageMap = new Map<string, { page: PageWorkbenchDto; doc?: DocumentDto }>();
+    for (const doc of documents) {
+      for (const page of pagesByDocument[doc.document_id] ?? []) {
+        pageMap.set(page.page_id, { page, doc });
+      }
+    }
+    for (const pageId of context.selected_ids) {
+      const match = pageMap.get(pageId);
+      labels.push(
+        match
+          ? `${match.doc?.original_filename ?? match.page.document_id} 第 ${match.page.page_number} 页`
+          : pageId,
+      );
+      if (match?.page && canAnalyzePage(match.page)) {
+        analyzablePages += 1;
+      }
+      if (match?.page.analysis_summary) {
+        existingJsonPages += 1;
+      }
+      if (!match || match.page.status === "failed") {
+        failedItems += 1;
+      }
+    }
+  }
+
+  return {
+    selectedKind: selectedKindLabel(context.selected_kind),
+    selectionCount: context.selection_count,
+    sourceTab: context.source_tab === "mediaManagement" ? "媒体管理" : context.source_tab,
+    selectedLabels: labels,
+    analyzablePages,
+    existingJsonPages,
+    failedItems,
+  };
+}
+
+function canAnalyzePage(page: PageWorkbenchDto) {
+  return (
+    Boolean(page.image_path) &&
+    (page.status === "rendered" || page.status === "failed" || page.status === "analyzed")
+  );
+}
+
+function selectedKindLabel(kind: NavigationContext["selected_kind"]) {
+  switch (kind) {
+    case "document":
+      return "单个媒体";
+    case "document_batch":
+      return "批量媒体";
+    case "page":
+      return "单页";
+    case "page_batch":
+      return "批量页面";
+    default:
+      return kind;
+  }
 }
 
 function formatMissingFields(missing: string[]): string {
@@ -269,6 +522,25 @@ function computeAnalysisStats(
 
 function formatBatchMessage(prefix: string, result: AnalysisBatchResultDto) {
   return `${prefix}：共 ${result.total_pages} 页，成功 ${result.succeeded_pages} 页，失败 ${result.failed_pages} 页，跳过 ${result.skipped_pages} 页。`;
+}
+
+function formatCombinedBatchMessage(prefix: string, results: AnalysisBatchResultDto[]) {
+  const totals = results.reduce(
+    (sum, result) => ({
+      total_pages: sum.total_pages + result.total_pages,
+      succeeded_pages: sum.succeeded_pages + result.succeeded_pages,
+      failed_pages: sum.failed_pages + result.failed_pages,
+      skipped_pages: sum.skipped_pages + result.skipped_pages,
+    }),
+    { total_pages: 0, succeeded_pages: 0, failed_pages: 0, skipped_pages: 0 },
+  );
+  return `${prefix}：共 ${totals.total_pages} 页，成功 ${totals.succeeded_pages} 页，失败 ${totals.failed_pages} 页，跳过 ${totals.skipped_pages} 页。`;
+}
+
+function formatPageAnalysisMessage(prefix: string, results: AnalysisResultDto[]) {
+  const succeeded = results.filter((result) => result.status === "succeeded").length;
+  const failed = results.length - succeeded;
+  return `${prefix}：共 ${results.length} 页，成功 ${succeeded} 页，失败 ${failed} 页。`;
 }
 
 function extractError(error: unknown): { message: string; correlationId?: string | null } {

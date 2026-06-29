@@ -1,6 +1,7 @@
 export type ViewId =
   | "workbench"
-  | "imageImport"
+  | "mediaImport"
+  | "mediaManagement"
   | "analysis"
   | "export"
   | "index"
@@ -12,9 +13,30 @@ export interface NavigationItem {
   label: string;
 }
 
+export type ReanalysisSelectedKind =
+  | "document"
+  | "document_batch"
+  | "page"
+  | "page_batch";
+
+export interface ReanalysisNavigationContext {
+  action: "reanalyze";
+  source_tab: ViewId;
+  return_to: ViewId;
+  selected_kind: ReanalysisSelectedKind;
+  selected_ids: string[];
+  filter: string;
+  query: string;
+  scroll_anchor: string | null;
+  selection_count: number;
+}
+
+export type NavigationContext = ReanalysisNavigationContext;
+
 export const navigationItems: NavigationItem[] = [
   { id: "workbench", label: "工作台" },
-  { id: "imageImport", label: "图片导入" },
+  { id: "mediaImport", label: "媒体导入" },
+  { id: "mediaManagement", label: "媒体管理" },
   { id: "analysis", label: "模型分析" },
   { id: "export", label: "一键导出" },
   { id: "index", label: "BM25 索引" },
