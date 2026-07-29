@@ -17,18 +17,14 @@ const PAGE_SIZE = 4;
 interface JobListProps {
   jobs: JobDto[];
   isLoading: boolean;
-  isCreatingDemo: boolean;
   errorMessage: { message: string; correlationId?: string | null } | null;
-  onCreateDemoJob: () => void;
   onRefresh: () => void;
 }
 
 export function JobList({
   jobs,
   isLoading,
-  isCreatingDemo,
   errorMessage,
-  onCreateDemoJob,
   onRefresh,
 }: JobListProps) {
   const [activeStatus, setActiveStatus] = useState<JobStatusFilter>("all");
@@ -63,15 +59,8 @@ export function JobList({
           </p>
         </div>
         <div className="action-row">
-          <Button onClick={onRefresh} disabled={isLoading || isCreatingDemo}>
+          <Button onClick={onRefresh} disabled={isLoading}>
             {isLoading ? "刷新中" : "刷新"}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={onCreateDemoJob}
-            disabled={isLoading || isCreatingDemo}
-          >
-            {isCreatingDemo ? "创建中" : "创建示例任务"}
           </Button>
         </div>
       </div>
@@ -81,7 +70,7 @@ export function JobList({
       {jobs.length === 0 ? (
         <EmptyState
           title={isLoading ? "正在读取任务" : "暂无任务"}
-          description="创建一个示例任务即可验证持久化任务结构与前端展示，不会触发真实业务处理。"
+          description="导入、分析、索引或导出任务运行后会在这里显示真实记录。"
         />
       ) : (
         <>

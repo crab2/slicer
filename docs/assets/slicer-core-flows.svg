@@ -1,0 +1,176 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1120" viewBox="0 0 1600 1120" role="img" aria-labelledby="title desc">
+  <title id="title">SLICER Core Flows</title>
+  <desc id="desc">A Figma-friendly overview diagram for SLICER workspace, import, analysis, index, search, API, and release flows.</desc>
+  <defs>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="14" flood-color="#132033" flood-opacity="0.14"/>
+    </filter>
+    <marker id="arrow-blue" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#2563eb"/>
+    </marker>
+    <marker id="arrow-green" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#059669"/>
+    </marker>
+    <marker id="arrow-amber" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#d97706"/>
+    </marker>
+    <style>
+      .page { fill: #f8fafc; }
+      .title { fill: #111827; font: 700 38px Arial, "Microsoft YaHei", sans-serif; }
+      .subtitle { fill: #475569; font: 400 17px Arial, "Microsoft YaHei", sans-serif; }
+      .section-title { fill: #0f172a; font: 700 20px Arial, "Microsoft YaHei", sans-serif; }
+      .label { fill: #111827; font: 700 16px Arial, "Microsoft YaHei", sans-serif; }
+      .small { fill: #475569; font: 400 13px Arial, "Microsoft YaHei", sans-serif; }
+      .tiny { fill: #64748b; font: 400 12px Arial, "Microsoft YaHei", sans-serif; }
+      .card { fill: #ffffff; stroke: #dbe4ee; stroke-width: 1.4; filter: url(#shadow); }
+      .card-blue { fill: #eff6ff; stroke: #bfdbfe; stroke-width: 1.4; }
+      .card-green { fill: #ecfdf5; stroke: #a7f3d0; stroke-width: 1.4; }
+      .card-amber { fill: #fffbeb; stroke: #fde68a; stroke-width: 1.4; }
+      .card-rose { fill: #fff1f2; stroke: #fecdd3; stroke-width: 1.4; }
+      .pill-blue { fill: #dbeafe; }
+      .pill-green { fill: #d1fae5; }
+      .pill-amber { fill: #fef3c7; }
+      .pill-rose { fill: #ffe4e6; }
+      .flow-blue { stroke: #2563eb; stroke-width: 3; fill: none; marker-end: url(#arrow-blue); }
+      .flow-green { stroke: #059669; stroke-width: 3; fill: none; marker-end: url(#arrow-green); }
+      .flow-amber { stroke: #d97706; stroke-width: 3; fill: none; marker-end: url(#arrow-amber); }
+      .flow-muted { stroke: #94a3b8; stroke-width: 2; fill: none; stroke-dasharray: 7 7; }
+      .lane { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1; }
+    </style>
+  </defs>
+
+  <rect class="page" width="1600" height="1120"/>
+
+  <text class="title" x="80" y="76">SLICER 核心流程总览</text>
+  <text class="subtitle" x="80" y="108">Tauri 桌面应用：本地工作区、文档切片、多模态分析、BM25 检索、Localhost API 与发布流水线</text>
+  <text class="tiny" x="80" y="134">SVG 资产可直接导入 Figma 继续编辑；对应 Mermaid 源在 docs/sequence-diagrams.md。</text>
+
+  <rect class="lane" x="80" y="175" width="1440" height="225" rx="18"/>
+  <text class="section-title" x="110" y="214">1. 工作区初始化与本地账本</text>
+
+  <rect class="card-blue" x="110" y="248" width="190" height="92" rx="12"/>
+  <text class="label" x="134" y="283">用户选择目录</text>
+  <text class="small" x="134" y="310">select_workspace(path)</text>
+
+  <rect class="card" x="360" y="248" width="210" height="92" rx="12"/>
+  <text class="label" x="386" y="283">WorkspaceService</text>
+  <text class="small" x="386" y="310">校验路径、恢复最近工作区</text>
+
+  <rect class="card-green" x="635" y="248" width="230" height="92" rx="12"/>
+  <text class="label" x="662" y="283">WorkspaceLayout</text>
+  <text class="small" x="662" y="310">originals/pages/metadata</text>
+
+  <rect class="card-amber" x="925" y="248" width="205" height="92" rx="12"/>
+  <text class="label" x="952" y="283">SQLite 迁移</text>
+  <text class="small" x="952" y="310">settings/jobs/documents/...</text>
+
+  <rect class="card-rose" x="1195" y="248" width="240" height="92" rx="12"/>
+  <text class="label" x="1224" y="283">ApiServerService</text>
+  <text class="small" x="1224" y="310">按工作区设置启停 API</text>
+
+  <path class="flow-blue" d="M300 294 H360"/>
+  <path class="flow-blue" d="M570 294 H635"/>
+  <path class="flow-green" d="M865 294 H925"/>
+  <path class="flow-amber" d="M1130 294 H1195"/>
+
+  <rect class="lane" x="80" y="440" width="1440" height="285" rx="18"/>
+  <text class="section-title" x="110" y="479">2. 导入、分析、索引、搜索主链路</text>
+
+  <rect class="card-blue" x="110" y="515" width="175" height="92" rx="12"/>
+  <text class="label" x="134" y="550">React 前端</text>
+  <text class="small" x="134" y="577">tauriClient 调用 IPC</text>
+
+  <rect class="card" x="340" y="515" width="170" height="92" rx="12"/>
+  <text class="label" x="365" y="550">ImportService</text>
+  <text class="small" x="365" y="577">PDF/Office/图片导入</text>
+
+  <rect class="card-green" x="565" y="515" width="185" height="92" rx="12"/>
+  <text class="label" x="590" y="550">页面资产</text>
+  <text class="small" x="590" y="577">pages/{document_id}</text>
+
+  <rect class="card-amber" x="805" y="515" width="190" height="92" rx="12"/>
+  <text class="label" x="830" y="550">AnalysisService</text>
+  <text class="small" x="830" y="577">模型分析 + schema 校验</text>
+
+  <rect class="card-rose" x="1050" y="515" width="180" height="92" rx="12"/>
+  <text class="label" x="1076" y="550">JSONL/SQLite</text>
+  <text class="small" x="1076" y="577">page_analysis_v1</text>
+
+  <rect class="card-green" x="1285" y="515" width="185" height="92" rx="12"/>
+  <text class="label" x="1310" y="550">BM25 索引</text>
+  <text class="small" x="1310" y="577">Tantivy build/search</text>
+
+  <path class="flow-blue" d="M285 561 H340"/>
+  <path class="flow-blue" d="M510 561 H565"/>
+  <path class="flow-amber" d="M750 561 H805"/>
+  <path class="flow-amber" d="M995 561 H1050"/>
+  <path class="flow-green" d="M1230 561 H1285"/>
+
+  <rect class="card" x="220" y="645" width="235" height="48" rx="10"/>
+  <text class="small" x="246" y="675">LibreOffice headless：Office → PDF</text>
+  <path class="flow-muted" d="M410 607 V645"/>
+
+  <rect class="card" x="520" y="645" width="235" height="48" rx="10"/>
+  <text class="small" x="546" y="675">Pdfium：PDF → PNG 页面图</text>
+  <path class="flow-muted" d="M650 607 V645"/>
+
+  <rect class="card" x="825" y="645" width="265" height="48" rx="10"/>
+  <text class="small" x="852" y="675">SiliconFlow / MiMo / OpenAI / Anthropic</text>
+  <path class="flow-muted" d="M900 607 V645"/>
+
+  <rect class="card" x="1170" y="645" width="245" height="48" rx="10"/>
+  <text class="small" x="1197" y="675">搜索返回页面 JSON 与图片预览</text>
+  <path class="flow-muted" d="M1377 607 V645"/>
+
+  <rect class="lane" x="80" y="765" width="700" height="235" rx="18"/>
+  <text class="section-title" x="110" y="804">3. Localhost API</text>
+
+  <rect class="card-blue" x="110" y="840" width="160" height="76" rx="12"/>
+  <text class="label" x="133" y="872">外部脚本</text>
+  <text class="small" x="133" y="896">curl / automation</text>
+
+  <rect class="card" x="330" y="840" width="160" height="76" rx="12"/>
+  <text class="label" x="357" y="872">Axum Router</text>
+  <text class="small" x="357" y="896">127.0.0.1:17321</text>
+
+  <rect class="card-amber" x="550" y="840" width="175" height="76" rx="12"/>
+  <text class="label" x="576" y="872">BearerAuth</text>
+  <text class="small" x="576" y="896">写操作 token 保护</text>
+
+  <path class="flow-blue" d="M270 878 H330"/>
+  <path class="flow-amber" d="M490 878 H550"/>
+
+  <rect class="card-green" x="170" y="940" width="500" height="38" rx="10"/>
+  <text class="small" x="196" y="965">GET /health · GET /search · GET /pages/{id} · GET /documents/{id} · POST /indexes/rebuild</text>
+
+  <rect class="lane" x="820" y="765" width="700" height="235" rx="18"/>
+  <text class="section-title" x="850" y="804">4. 发布流水线</text>
+
+  <rect class="card-blue" x="850" y="840" width="150" height="76" rx="12"/>
+  <text class="label" x="877" y="872">Tag v*</text>
+  <text class="small" x="877" y="896">或手动触发</text>
+
+  <rect class="card" x="1050" y="840" width="160" height="76" rx="12"/>
+  <text class="label" x="1077" y="872">GitHub Actions</text>
+  <text class="small" x="1077" y="896">release.yml</text>
+
+  <rect class="card-green" x="1260" y="840" width="195" height="76" rx="12"/>
+  <text class="label" x="1288" y="872">Tauri Action</text>
+  <text class="small" x="1288" y="896">Windows/macOS/Linux</text>
+
+  <path class="flow-blue" d="M1000 878 H1050"/>
+  <path class="flow-green" d="M1210 878 H1260"/>
+
+  <rect class="card-amber" x="920" y="940" width="460" height="38" rx="10"/>
+  <text class="small" x="946" y="965">发布前：npm run build · cargo test · smoke test · 版本号一致 · 不含密钥</text>
+
+  <rect class="pill-blue" x="80" y="1038" width="170" height="34" rx="17"/>
+  <text class="tiny" x="103" y="1060">本地优先数据</text>
+  <rect class="pill-green" x="270" y="1038" width="190" height="34" rx="17"/>
+  <text class="tiny" x="293" y="1060">可重建派生产物</text>
+  <rect class="pill-amber" x="480" y="1038" width="175" height="34" rx="17"/>
+  <text class="tiny" x="504" y="1060">远程模型可选</text>
+  <rect class="pill-rose" x="675" y="1038" width="210" height="34" rx="17"/>
+  <text class="tiny" x="699" y="1060">API key 仅存 keyring</text>
+  <text class="tiny" x="1110" y="1060">SLICER docs · generated 2026-07-02</text>
+</svg>

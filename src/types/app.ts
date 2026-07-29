@@ -39,6 +39,7 @@ export interface AppSettingsDto {
   base_url: string;
   custom_endpoint: string;
   model_name: string;
+  model_profiles: ModelProfileDto[];
   default_image_dpi: number;
   conversion_concurrency: number;
   analysis_concurrency: number;
@@ -52,6 +53,49 @@ export interface ModelConfigurationStatusDto {
   missing: string[];
   privacy_notice_accepted: boolean;
   requires_privacy_notice: boolean;
+}
+
+export interface ModelInfoDto {
+  id: string;
+  display_name?: string | null;
+  owned_by?: string | null;
+}
+
+export interface ModelListDto {
+  provider: string;
+  models: ModelInfoDto[];
+}
+
+export interface ModelProfileDto {
+  profile_id: string;
+  label: string;
+  provider: string;
+  base_url: string;
+  custom_endpoint: string;
+  model_name: string;
+  key_id?: string | null;
+  key_label?: string | null;
+  api_key_configured: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ModelProfileListDto {
+  profiles: ModelProfileDto[];
+  max_profiles: number;
+}
+
+export interface ModelProfileUpsertRequestDto {
+  profile_id?: string | null;
+  label: string;
+  provider: string;
+  base_url: string;
+  custom_endpoint: string;
+  model_name: string;
+  api_key_label: string;
+  api_key?: string | null;
+  activate: boolean;
 }
 
 export interface PrivacyNoticeStatusDto {
@@ -238,4 +282,11 @@ export interface ApiKeyRecordDto {
 
 export interface ApiKeyListDto {
   keys: ApiKeyRecordDto[];
+}
+
+export interface MediaExportResultDto {
+  markdown_path: string;
+  export_dir: string;
+  document_count: number;
+  media_count: number;
 }

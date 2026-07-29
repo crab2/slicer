@@ -135,11 +135,22 @@ impl SearchService {
     ) -> AppResult<Option<String>> {
         let layout = workspace.workspace_layout()?;
         let mut conn = workspace.get_db_connection()?;
-        let analysis = AnalysisRepository::find_succeeded_page_analysis(&mut conn, page_id)?;
-        let Some(analysis) = analysis else {
-            return Ok(None);
+        let image_path = match AnalysisRepository::find_succeeded_page_analysis(&mut conn, page_id)?
+        {
+            Some(analysis) => analysis.image_path,
+            None => {
+                let Some(page) = DocumentRepository::find_page_by_id(&mut conn, page_id)? else {
+                    return Ok(None);
+                };
+                let Some(asset) =
+                    DocumentRepository::find_image_asset_by_hash(&mut conn, &page.image_hash)?
+                else {
+                    return Ok(None);
+                };
+                asset.file_path
+            }
         };
-        let image_path = workspace_image_path(&layout, &analysis.image_path)?;
+        let image_path = workspace_image_path(&layout, &image_path)?;
         let Some(image_path) = image_path else {
             return Ok(None);
         };

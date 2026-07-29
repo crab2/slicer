@@ -9,12 +9,16 @@ import type {
   AppErrorDto,
   AppSettingsDto,
   ModelConfigurationStatusDto,
+  ModelProfileListDto,
+  ModelProfileUpsertRequestDto,
   PrivacyNoticeStatusDto,
   CoreStatusCatalogDto,
   CreateJobRequestDto,
   DocumentDto,
   ImportResultDto,
   JobDto,
+  MediaExportResultDto,
+  ModelListDto,
   PageRecordDto,
   PageWorkbenchDto,
   IndexRebuildStartDto,
@@ -23,7 +27,15 @@ import type {
   UpdateJobProgressRequestDto,
   WorkspaceStatusDto,
 } from "../types/app";
-import { isSupportedFileType, getUnsupportedReason } from "./fileValidation";
+import {
+  getUnsupportedDocumentReason,
+  getUnsupportedImageReason,
+  getUnsupportedReason,
+  isDocumentFileType,
+  isImageFileType,
+  isSupportedFileType,
+  SUPPORTED_EXTENSIONS,
+} from "./fileValidation";
 
 export type TauriCommandArgs = Record<string, unknown>;
 
@@ -86,6 +98,30 @@ export const tauriClient = {
     });
     return selected;
   },
+  openMediaImportDialog: async () => {
+    const selected = await open({
+      multiple: true,
+      filters: [
+        {
+          name: "媒体",
+          extensions: SUPPORTED_EXTENSIONS.map((ext) => ext.slice(1)),
+        },
+      ],
+    });
+    return selected;
+  },
+  openImageImportDialog: async () => {
+    const selected = await open({
+      multiple: true,
+      filters: [
+        {
+          name: "图片",
+          extensions: ["png", "jpg", "jpeg"],
+        },
+      ],
+    });
+    return selected;
+  },
   getAppSettings: () => callTauriCommand<AppSettingsDto>("get_app_settings"),
   saveAppSettings: (settings: AppSettingsDto) =>
     callTauriCommand<void>("save_app_settings", { settings }),
@@ -106,8 +142,18 @@ export const tauriClient = {
   deleteApiKey: () => callTauriCommand<void>("delete_api_key"),
   deleteProviderApiKey: (provider: string) =>
     callTauriCommand<void>("delete_provider_api_key", { provider }),
+  listModelProfiles: () =>
+    callTauriCommand<ModelProfileListDto>("list_model_profiles"),
+  upsertModelProfile: (request: ModelProfileUpsertRequestDto) =>
+    callTauriCommand<ModelProfileListDto>("upsert_model_profile", { request }),
+  activateModelProfile: (profileId: string) =>
+    callTauriCommand<ModelProfileListDto>("activate_model_profile", { profileId }),
+  deleteModelProfile: (profileId: string) =>
+    callTauriCommand<ModelProfileListDto>("delete_model_profile", { profileId }),
   getModelConfigurationStatus: () =>
     callTauriCommand<ModelConfigurationStatusDto>("get_model_configuration_status"),
+  listOpenAIModels: (settings: AppSettingsDto, apiKey?: string | null, profileId?: string | null) =>
+    callTauriCommand<ModelListDto>("list_openai_models", { settings, apiKey, profileId }),
   getPrivacyNoticeStatus: () =>
     callTauriCommand<PrivacyNoticeStatusDto>("get_privacy_notice_status"),
   acceptPrivacyNotice: () => callTauriCommand<void>("accept_privacy_notice"),
@@ -124,8 +170,21 @@ export const tauriClient = {
     callTauriCommand<AppErrorDto>("record_diagnostic_error", { code, message, stage }),
   importPdf: (filePath: string) =>
     callTauriCommand<DocumentDto>("import_pdf", { filePath }),
-  importMultiplePdf: async (filePaths: string[]): Promise<ImportResultDto[]> => {
+  importImage: (filePath: string) =>
+    callTauriCommand<DocumentDto>("import_image", { filePath }),
+  importFile: (filePath: string) =>
+    isImageFileType(filePath)
+      ? callTauriCommand<DocumentDto>("import_image", { filePath })
+      : callTauriCommand<DocumentDto>("import_pdf", { filePath }),
+  importMultipleFiles: async (filePaths: string[]): Promise<ImportResultDto[]> => {
     const results: ImportResultDto[] = [];
+    let importedIds = new Set<string>();
+    try {
+      const existingDocuments = await tauriClient.listDocuments();
+      importedIds = new Set(existingDocuments.map((doc) => doc.document_id));
+    } catch {
+      importedIds = new Set<string>();
+    }
     for (const filePath of filePaths) {
       const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
       if (!isSupportedFileType(filePath)) {
@@ -137,24 +196,90 @@ export const tauriClient = {
         continue;
       }
       try {
-        const doc = await callTauriCommand<DocumentDto>("import_pdf", { filePath });
+        const doc = await tauriClient.importFile(filePath);
+        const duplicate = importedIds.has(doc.document_id);
+        importedIds.add(doc.document_id);
         results.push({
           file_name: fileName,
-          status: doc.page_count != null ? "success" : "duplicate",
+          status: duplicate ? "duplicate" : "success",
           document: doc,
         });
       } catch (error) {
-        const msg =
-          typeof error === "object" && error !== null && "message" in error
-            ? String((error as Record<string, unknown>).message)
-            : typeof error === "string"
-              ? error
-              : "导入失败";
-        results.push({ file_name: fileName, status: "failed", error: msg });
+        results.push({ file_name: fileName, status: "failed", error: extractImportError(error) });
       }
     }
     return results;
   },
+  importMultipleDocuments: async (filePaths: string[]): Promise<ImportResultDto[]> => {
+    const results: ImportResultDto[] = [];
+    let importedIds = new Set<string>();
+    try {
+      const existingDocuments = await tauriClient.listDocuments();
+      importedIds = new Set(existingDocuments.map((doc) => doc.document_id));
+    } catch {
+      importedIds = new Set<string>();
+    }
+    for (const filePath of filePaths) {
+      const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
+      if (!isDocumentFileType(filePath)) {
+        results.push({
+          file_name: fileName,
+          status: "unsupported",
+          error: getUnsupportedDocumentReason(filePath),
+        });
+        continue;
+      }
+      try {
+        const doc = await tauriClient.importPdf(filePath);
+        const duplicate = importedIds.has(doc.document_id);
+        importedIds.add(doc.document_id);
+        results.push({
+          file_name: fileName,
+          status: duplicate ? "duplicate" : "success",
+          document: doc,
+        });
+      } catch (error) {
+        results.push({ file_name: fileName, status: "failed", error: extractImportError(error) });
+      }
+    }
+    return results;
+  },
+  importMultipleImages: async (filePaths: string[]): Promise<ImportResultDto[]> => {
+    const results: ImportResultDto[] = [];
+    let importedIds = new Set<string>();
+    try {
+      const existingDocuments = await tauriClient.listDocuments();
+      importedIds = new Set(existingDocuments.map((doc) => doc.document_id));
+    } catch {
+      importedIds = new Set<string>();
+    }
+    for (const filePath of filePaths) {
+      const fileName = filePath.split(/[/\\]/).pop() ?? filePath;
+      if (!isImageFileType(filePath)) {
+        results.push({
+          file_name: fileName,
+          status: "unsupported",
+          error: getUnsupportedImageReason(filePath),
+        });
+        continue;
+      }
+      try {
+        const doc = await tauriClient.importImage(filePath);
+        const duplicate = importedIds.has(doc.document_id);
+        importedIds.add(doc.document_id);
+        results.push({
+          file_name: fileName,
+          status: duplicate ? "duplicate" : "success",
+          document: doc,
+        });
+      } catch (error) {
+        results.push({ file_name: fileName, status: "failed", error: extractImportError(error) });
+      }
+    }
+    return results;
+  },
+  importMultiplePdf: async (filePaths: string[]): Promise<ImportResultDto[]> =>
+    tauriClient.importMultipleDocuments(filePaths),
   listDocuments: () => callTauriCommand<DocumentDto[]>("list_documents"),
   retryImport: (documentId: string) =>
     callTauriCommand<DocumentDto>("retry_import", { documentId }),
@@ -185,4 +310,20 @@ export const tauriClient = {
   getApiServerStatus: () =>
     callTauriCommand<ApiServerStatusDto>("get_api_server_status"),
   resetApiToken: () => callTauriCommand<string>("reset_api_token"),
+  openExportFolderDialog: async () => {
+    const selected = await open({ directory: true, multiple: false });
+    return selected;
+  },
+  exportMedia: (destination: string) =>
+    callTauriCommand<MediaExportResultDto>("export_media", { destination }),
 };
+
+function extractImportError(error: unknown) {
+  if (typeof error === "object" && error !== null && "message" in error) {
+    return String((error as Record<string, unknown>).message);
+  }
+  if (typeof error === "string") {
+    return error;
+  }
+  return "导入失败";
+}

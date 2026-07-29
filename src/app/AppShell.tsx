@@ -2,15 +2,25 @@ import { useEffect, useState } from "react";
 import { EmptyState } from "../components/common/EmptyState";
 import { ErrorMessage } from "../components/common/ErrorMessage";
 import { StatusBadge } from "../components/common/StatusBadge";
+import { AnalysisPage } from "../features/analysis/AnalysisPage";
+import { ExportPage } from "../features/export/ExportPage";
+import { IndexPage } from "../features/index/IndexPage";
+import { MediaImportPage } from "../features/media-import/MediaImportPage";
+import { MediaManagementPage } from "../features/media-management/MediaManagementPage";
 import { SearchPage } from "../features/search/SearchPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { WorkbenchPage } from "../features/workbench/WorkbenchPage";
 import { tauriClient } from "../lib/tauriClient";
 import type { WorkspaceStatusDto } from "../types/app";
-import { navigationItems, type ViewId } from "./navigation";
+import { navigationItems, type NavigationContext, type ViewId } from "./navigation";
 
 const pageTitles: Record<ViewId, string> = {
   workbench: "工作台",
+  mediaImport: "媒体导入",
+  mediaManagement: "媒体管理",
+  analysis: "模型分析",
+  export: "一键导出",
+  index: "BM25 索引",
   search: "搜索",
   settings: "设置",
 };
@@ -23,6 +33,8 @@ const initialWorkspaceStatus: WorkspaceStatusDto = {
 
 export function AppShell() {
   const [activeView, setActiveView] = useState<ViewId>("workbench");
+  const [navigationContext, setNavigationContext] =
+    useState<NavigationContext | null>(null);
   const [workspaceStatus, setWorkspaceStatus] =
     useState<WorkspaceStatusDto>(initialWorkspaceStatus);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
@@ -54,6 +66,21 @@ export function AppShell() {
     void refreshWorkspaceStatus();
   }, []);
 
+  function handleSetActiveView(view: ViewId) {
+    setActiveView(view);
+    setNavigationContext(null);
+  }
+
+  function handleNavigateWithContext(view: ViewId, context: NavigationContext) {
+    setNavigationContext(context);
+    setActiveView(view);
+  }
+
+  function handleReturnToSource() {
+    const target = navigationContext?.return_to ?? "mediaManagement";
+    setActiveView(target);
+  }
+
   const workspaceReady = workspaceStatus.status === "ready";
   const workspaceIssue = workspaceStatus.error?.message;
   const sidebarWorkspacePath = workspaceStatus.workspace_path;
@@ -78,7 +105,7 @@ export function AppShell() {
               className="nav-item"
               data-active={activeView === item.id}
               key={item.id}
-              onClick={() => setActiveView(item.id)}
+              onClick={() => handleSetActiveView(item.id)}
               type="button"
             >
               {item.label}
@@ -94,7 +121,7 @@ export function AppShell() {
         </div>
       </aside>
 
-      <main className="main-area">
+      <main className={`main-area${activeView === "settings" ? " main-area-settings" : ""}`}>
         <header className="topbar">
           <div>
             <p className="eyebrow">当前视图</p>
@@ -116,7 +143,55 @@ export function AppShell() {
               isWorkspaceLoading={isWorkspaceLoading}
               isActive={activeView === "workbench"}
               onChooseWorkspace={handleChooseWorkspace}
-              onOpenSettings={() => setActiveView("settings")}
+              onOpenSettings={() => handleSetActiveView("settings")}
+              onOpenMediaImport={() => handleSetActiveView("mediaImport")}
+              onOpenMediaManagement={() => handleSetActiveView("mediaManagement")}
+              onOpenAnalysis={() => handleSetActiveView("analysis")}
+              onOpenExport={() => handleSetActiveView("export")}
+              onOpenIndex={() => handleSetActiveView("index")}
+              onOpenSearch={() => handleSetActiveView("search")}
+            />
+          </div>
+
+          <div hidden={activeView !== "mediaImport"}>
+            <MediaImportPage
+              workspaceStatus={workspaceStatus}
+              isWorkspaceLoading={isWorkspaceLoading}
+              isActive={activeView === "mediaImport"}
+              onChooseWorkspace={handleChooseWorkspace}
+            />
+          </div>
+
+          <div hidden={activeView !== "mediaManagement"}>
+            <MediaManagementPage
+              workspaceStatus={workspaceStatus}
+              isWorkspaceLoading={isWorkspaceLoading}
+              isActive={activeView === "mediaManagement"}
+              navigationContext={navigationContext}
+              onChooseWorkspace={handleChooseWorkspace}
+              onNavigateWithContext={handleNavigateWithContext}
+              onClearNavigationContext={() => setNavigationContext(null)}
+            />
+          </div>
+
+          <div hidden={activeView !== "analysis"}>
+            <AnalysisPage
+              workspaceReady={workspaceReady}
+              isActive={activeView === "analysis"}
+              navigationContext={navigationContext}
+              onOpenSettings={() => handleSetActiveView("settings")}
+              onReturnToSource={handleReturnToSource}
+            />
+          </div>
+
+          <div hidden={activeView !== "export"}>
+            <ExportPage workspaceReady={workspaceReady} />
+          </div>
+
+          <div hidden={activeView !== "index"}>
+            <IndexPage
+              workspaceReady={workspaceReady}
+              isActive={activeView === "index"}
             />
           </div>
 
