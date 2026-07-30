@@ -43,3 +43,12 @@ Collected during story 1.4 review (2026-05-18).
 - **页面 HTTP API 尚未返回结构化块**：`/pages/{page_id}` 保持旧 `PageRecordDto` 合约；后续应增加版本化的模块、bbox、enrichment 和 ODL 制品查询接口，而不是破坏现有调用方。
 - **文档删除的数据库与制品清理不是跨介质原子操作**：账本提交后若目录删除失败会遗留孤立制品；后续应采用先隔离到回收目录、提交账本后异步清理并保留恢复元数据的流程。
 - **索引状态 DTO 仍沿用 page_count 字段名表示内容项数量**：前端已改为“内容项/索引项”显示；后续 API 大版本可迁移为 item_count，并保留旧字段兼容期。
+
+## Deferred from: Office import storage ID review (2026-07-30)
+
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-doc-import-storage-id.md`
+  summary: 受管临时目录清理失败目前只被静默忽略。
+  evidence: `ArtifactDirectoryCleanup::drop` 丢弃 `remove_dir_all` 错误；Windows 文件占用或权限变化时可能遗留转换制品，需要独立设计重试、日志或启动清理策略。
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-doc-import-storage-id.md`
+  summary: 受管目录创建成功后若规范化解析失败，调用方尚未取得清理所有权。
+  evidence: `ensure_managed_document_dir` 先创建目录再调用 `resolve_existing_managed_document_dir`；后者失败时新目录可能残留，应在工作区布局层统一处理。

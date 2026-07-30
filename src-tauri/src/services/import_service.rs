@@ -573,9 +573,7 @@ impl ImportService {
 
         orchestrator.update_progress(job_id, 10, Some("正在转换为 PDF"))?;
 
-        let conversion_dir_id = format!("office-conversion-{job_id}");
-        let conversion_dir =
-            layout.ensure_managed_document_dir(&layout.tmp_dir(), &conversion_dir_id)?;
+        let conversion_dir = layout.ensure_managed_document_dir(&layout.tmp_dir(), job_id)?;
         let _conversion_cleanup = ArtifactDirectoryCleanup::new(conversion_dir.clone());
 
         let converted_pdf = converter
@@ -1623,6 +1621,8 @@ mod tests {
     use crate::domain::document::DocumentDto;
     use crate::errors::{AppError, AppResult};
     use crate::jobs::job_orchestrator::JobOrchestrator;
+    use crate::providers::converter::DocumentConverter;
+    use crate::providers::pdf_renderer::PdfiumRenderer;
     use crate::repositories::document_repository::DocumentRepository;
     use crate::services::api_server_service::ApiServerService;
     use crate::services::workspace_service::WorkspaceService;
@@ -1630,8 +1630,32 @@ mod tests {
     use std::fs;
     use std::io::Cursor;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     use uuid::Uuid;
+
+    struct FailingProbeConverter {
+        output_dir: Arc<Mutex<Option<PathBuf>>>,
+    }
+
+    impl DocumentConverter for FailingProbeConverter {
+        fn convert_to_pdf(&self, _input_path: &Path, output_dir: &Path) -> AppResult<PathBuf> {
+            assert!(
+                output_dir.is_dir(),
+                "conversion output directory must exist"
+            );
+            let nested = output_dir.join("nested");
+            fs::create_dir(&nested).expect("nested conversion artifact directory");
+            fs::write(nested.join("partial.pdf"), b"partial conversion artifact")
+                .expect("partial conversion artifact");
+            *self.output_dir.lock().expect("output dir lock") = Some(output_dir.to_path_buf());
+            Err(AppError::new(
+                "probe_conversion_failed",
+                "probe conversion failed",
+                "test",
+                true,
+            ))
+        }
+    }
 
     fn test_workspace(label: &str) -> (WorkspaceService, PathBuf, PathBuf) {
         let base = std::env::temp_dir().join(format!(
@@ -1709,6 +1733,59 @@ mod tests {
             cleanup.disarm();
         }
         assert!(final_dir.is_dir());
+
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn office_import_uses_uuid_conversion_dir_and_cleans_it_after_failure() {
+        let (service, base, _) = test_workspace("office-conversion-dir");
+        let source = base.join("source.doc");
+        fs::write(&source, b"office fixture").expect("write office fixture");
+        let output_dir = Arc::new(Mutex::new(None));
+        let converter = FailingProbeConverter {
+            output_dir: Arc::clone(&output_dir),
+        };
+
+        let error = ImportService::import_document(&service, &source, &PdfiumRenderer, &converter)
+            .expect_err("probe converter should fail the import");
+
+        assert_eq!(error.code, "conversion_failed");
+        let conversion_dir = output_dir
+            .lock()
+            .expect("output dir lock")
+            .clone()
+            .expect("converter should receive an output directory");
+        let layout = service.workspace_layout().expect("layout");
+        let tmp_dir = fs::canonicalize(layout.tmp_dir()).expect("canonical tmp dir");
+        assert_eq!(conversion_dir.parent(), Some(tmp_dir.as_path()));
+        let directory_id = conversion_dir
+            .file_name()
+            .and_then(|value| value.to_str())
+            .expect("conversion directory id");
+        assert!(Uuid::parse_str(directory_id).is_ok());
+        assert!(!conversion_dir.exists());
+
+        let mut conn = service.get_db_connection().expect("db");
+        let documents = DocumentRepository::list_documents(&mut conn).expect("documents");
+        assert_eq!(documents.len(), 1);
+        assert_eq!(documents[0].status, "failed");
+        let job_id = documents[0].job_id.as_deref().expect("job id");
+        assert_eq!(directory_id, job_id);
+        let job = JobOrchestrator::new(layout)
+            .list_jobs()
+            .expect("jobs")
+            .into_iter()
+            .find(|job| job.job_id == job_id)
+            .expect("office import job");
+        assert_eq!(job.status, "failed");
+        assert!(
+            fs::read_dir(&tmp_dir)
+                .expect("tmp directory")
+                .next()
+                .is_none(),
+            "office import must not leave temporary artifacts"
+        );
 
         let _ = fs::remove_dir_all(base);
     }
