@@ -901,9 +901,9 @@ h3 {
 .search-bbox-overlay {
   position: absolute;
   box-sizing: border-box;
-  border: 3px solid #c53d2b;
-  background: rgba(224, 76, 52, 0.17);
-  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.82);
+  border: 0;
+  background: rgba(37, 99, 235, 0.28);
+  box-shadow: inset 0 0 0 2px rgba(29, 78, 216, 0.72);
   pointer-events: none;
 }
 
@@ -1230,6 +1230,91 @@ h3 {
 
 .search-viewer-column {
   min-width: 0;
+}
+
+.search-hit-viewer {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  min-height: 640px;
+  overflow: hidden;
+  border: 1px solid #cfd9de;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.search-hit-pane {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.search-hit-pane + .search-hit-pane {
+  border-left: 1px solid #d8e0e4;
+}
+
+.search-hit-pane-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+  min-height: 68px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #d8e0e4;
+}
+
+.search-hit-pane-header > div,
+.search-hit-pane-header h3 {
+  min-width: 0;
+}
+
+.search-hit-pane-header h3 {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.search-hit-preview-content,
+.search-hit-json-content {
+  min-width: 0;
+  min-height: 0;
+  background: #f1f4f5;
+}
+
+.search-hit-preview-content {
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow: auto;
+}
+
+.search-hit-preview-content > .empty-state {
+  width: 100%;
+}
+
+.search-preview-error {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  width: 100%;
+}
+
+.search-preview-error > .empty-state {
+  width: 100%;
+}
+
+.search-hit-preview-content .search-preview-image {
+  max-height: 596px;
+  border-radius: 0;
+}
+
+.search-hit-json-content {
+  overflow: hidden;
+}
+
+.search-hit-json-source {
+  min-height: 596px;
 }
 
 .media-asset-row-simple {
@@ -2260,7 +2345,16 @@ h3 {
     grid-template-columns: minmax(0, 1fr);
   }
 
+  .search-hit-viewer {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
   .document-viewer-pane + .document-viewer-pane {
+    border-top: 1px solid #d8e0e4;
+    border-left: 0;
+  }
+
+  .search-hit-pane + .search-hit-pane {
     border-top: 1px solid #d8e0e4;
     border-left: 0;
   }

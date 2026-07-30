@@ -10,6 +10,7 @@ use crate::domain::index::{
 use crate::domain::pdf_structure::PdfContentBlockDto;
 use crate::errors::{AppError, AppResult};
 use crate::jobs::job_orchestrator::JobOrchestrator;
+use crate::providers::pdf_renderer::render_pdf_page_to_png;
 use crate::providers::search::search_provider::SearchProvider;
 use crate::providers::search::tantivy_bm25_provider::TantivyBm25SearchProvider;
 use crate::repositories::analysis_repository::AnalysisRepository;
@@ -17,6 +18,7 @@ use crate::repositories::db::block_on_db;
 use crate::repositories::document_repository::DocumentRepository;
 use crate::repositories::index_repository::IndexRepository;
 use crate::repositories::pdf_structure_repository::PdfStructureRepository;
+use crate::services::document_viewer_service::DocumentViewerService;
 use crate::services::workspace_service::WorkspaceService;
 use base64::{engine::general_purpose, Engine as _};
 use serde_json::{to_string_pretty, Map, Value};
@@ -32,6 +34,7 @@ use std::thread;
 pub struct SearchService;
 
 static INDEX_REBUILD_STATE_LOCK: Mutex<()> = Mutex::new(());
+static SEARCH_PREVIEW_RENDER_LOCK: Mutex<()> = Mutex::new(());
 
 const MODULE_SNAPSHOT_TEXT_CHARS: usize = 4_000;
 const MODULE_SNAPSHOT_ENRICHMENT_CHARS: usize = 2_000;
@@ -175,35 +178,76 @@ impl SearchService {
     ) -> AppResult<Option<String>> {
         let layout = workspace.workspace_layout()?;
         let mut conn = workspace.get_db_connection()?;
-        let image_path = match AnalysisRepository::find_succeeded_page_analysis(&mut conn, page_id)?
-        {
-            Some(analysis) => analysis.image_path,
-            None => {
-                let Some(page) = DocumentRepository::find_page_by_id(&mut conn, page_id)? else {
-                    return Ok(None);
-                };
-                let Some(image_hash) = page.image_hash.as_deref() else {
-                    return Ok(None);
-                };
-                let Some(asset) =
-                    DocumentRepository::find_image_asset_by_hash(&mut conn, image_hash)?
-                else {
-                    return Ok(None);
-                };
-                asset.file_path
-            }
-        };
-        let image_path = workspace_image_path(&layout, &image_path)?;
-        let Some(image_path) = image_path else {
+        let Some(page) = DocumentRepository::find_page_by_id(&mut conn, page_id)? else {
             return Ok(None);
         };
-        let bytes = fs::read(&image_path).map_err(|err| {
-            AppError::io("search", "search_preview_image_read_failed", err)
-                .with_details(image_path.display().to_string())
+        let mut stored_image_paths = Vec::with_capacity(2);
+        if let Some(analysis) =
+            AnalysisRepository::find_succeeded_page_analysis(&mut conn, page_id)?
+        {
+            stored_image_paths.push(analysis.image_path);
+        }
+        if let Some(image_hash) = page.image_hash.as_deref() {
+            if let Some(asset) =
+                DocumentRepository::find_image_asset_by_hash(&mut conn, image_hash)?
+            {
+                if !stored_image_paths.contains(&asset.file_path) {
+                    stored_image_paths.push(asset.file_path);
+                }
+            }
+        }
+        drop(conn);
+
+        for image_path in stored_image_paths {
+            if let Some(image_path) = workspace_image_path(&layout, &image_path)? {
+                let bytes = match fs::read(&image_path) {
+                    Ok(bytes) => bytes,
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+                    Err(error) => {
+                        return Err(AppError::io(
+                            "search",
+                            "search_preview_image_read_failed",
+                            error,
+                        )
+                        .with_details(image_path.display().to_string()))
+                    }
+                };
+                let mime = image_mime_type(&image_path);
+                let encoded = general_purpose::STANDARD.encode(bytes);
+                return Ok(Some(format!("data:{mime};base64,{encoded}")));
+            }
+        }
+
+        let _render_guard = SEARCH_PREVIEW_RENDER_LOCK.lock().map_err(|_| {
+            AppError::new(
+                "search_preview_render_lock_failed",
+                "搜索预览渲染器暂时不可用。",
+                "search",
+                true,
+            )
         })?;
-        let mime = image_mime_type(&image_path);
-        let encoded = general_purpose::STANDARD.encode(bytes);
-        Ok(Some(format!("data:{mime};base64,{encoded}")))
+        let pdf_content =
+            match DocumentViewerService::get_content(workspace, &page.document_id, "pdf") {
+                Ok(content) => content,
+                Err(error) if error.code == "document_viewer_format_unavailable" => {
+                    return Ok(None)
+                }
+                Err(error) => return Err(error),
+            };
+        let pdf_bytes = general_purpose::STANDARD
+            .decode(&pdf_content.content)
+            .map_err(|error| {
+                AppError::new(
+                    "search_preview_pdf_decode_failed",
+                    "搜索预览 PDF 解码失败。",
+                    "search",
+                    false,
+                )
+                .with_details(error.to_string())
+            })?;
+        let png_bytes = render_pdf_page_to_png(&pdf_bytes, page.page_number)?;
+        let encoded = general_purpose::STANDARD.encode(png_bytes);
+        Ok(Some(format!("data:image/png;base64,{encoded}")))
     }
 
     fn run_index_rebuild(
@@ -1180,14 +1224,18 @@ mod tests {
     use crate::domain::index::{
         module_hit_id, IndexVersionDto, SearchHitDto, SearchIndexDocument, TANTIVY_ANALYZER_VERSION,
     };
+    use crate::domain::pdf_structure::DocumentArtifactInput;
     use crate::domain::pdf_structure::{NormalizedBbox, PdfContentBlockDto};
     use crate::providers::search::mock_search_provider::MockSearchProvider;
     use crate::providers::search::search_provider::SearchProvider;
     use crate::repositories::db::{block_on_db, connect_workspace_db, run_migrations};
     use crate::repositories::document_repository::DocumentRepository;
     use crate::repositories::index_repository::IndexRepository;
+    use crate::repositories::pdf_structure_repository::PdfStructureRepository;
     use crate::services::api_server_service::ApiServerService;
     use crate::services::workspace_service::WorkspaceService;
+    use base64::{engine::general_purpose, Engine as _};
+    use sha2::{Digest, Sha256};
     use std::fs;
     use std::path::PathBuf;
     use std::sync::{mpsc, Arc};
@@ -1311,6 +1359,81 @@ mod tests {
                 .expect("deleted document lookup")
                 .is_none()
         );
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn page_preview_renders_registered_canonical_pdf_when_page_image_is_missing() {
+        let root =
+            std::env::temp_dir().join(format!("slicer-search-preview-{}", uuid::Uuid::new_v4()));
+        let service = WorkspaceService::new(root.join("config"));
+        let api = ApiServerService::new(ApiAppState::new(Arc::new(service.clone())));
+        let selected =
+            service.select_workspace(root.join("workspace").to_string_lossy().into_owned(), &api);
+        assert_eq!(selected.status, "ready");
+
+        let layout = service.workspace_layout().expect("layout");
+        let mut conn = service.get_db_connection().expect("connection");
+        let document = DocumentRepository::create_document(
+            &mut conn,
+            "structured.pdf",
+            "pdf",
+            "structured-hash",
+            "originals/structured.pdf",
+            None,
+        )
+        .expect("document");
+        let page =
+            DocumentRepository::create_structured_page_record(&mut conn, &document.document_id, 2)
+                .expect("structured page");
+        DocumentRepository::update_document_status(
+            &mut conn,
+            &document.document_id,
+            "ready",
+            Some(2),
+            None,
+        )
+        .expect("ready document");
+
+        let pdf_bytes = include_bytes!("../../../tmp/pdfs/structured-retrieval-fixture.pdf");
+        let pdf_path = layout
+            .canonical_pdfs_dir()
+            .join(&document.document_id)
+            .join("canonical.pdf");
+        fs::create_dir_all(pdf_path.parent().expect("pdf parent")).expect("pdf parent");
+        fs::write(&pdf_path, pdf_bytes).expect("canonical pdf");
+        let relative_path = pdf_path
+            .strip_prefix(layout.root())
+            .expect("workspace relative")
+            .to_string_lossy()
+            .replace('\\', "/");
+        PdfStructureRepository::upsert_canonical_pdf(
+            &mut conn,
+            &DocumentArtifactInput {
+                artifact_id: uuid::Uuid::new_v4().to_string(),
+                document_id: document.document_id,
+                kind: "canonical_pdf".to_string(),
+                relative_path,
+                content_hash: format!("{:x}", Sha256::digest(pdf_bytes)),
+                parser_name: None,
+                parser_version: None,
+                parser_options_json: None,
+            },
+        )
+        .expect("register canonical pdf");
+        drop(conn);
+
+        let preview = SearchService::get_page_image_preview(&service, &page.page_id)
+            .expect("preview")
+            .expect("preview data url");
+        let encoded = preview
+            .strip_prefix("data:image/png;base64,")
+            .expect("png data url");
+        let png = general_purpose::STANDARD
+            .decode(encoded)
+            .expect("png bytes");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
 
         let _ = fs::remove_dir_all(root);
     }

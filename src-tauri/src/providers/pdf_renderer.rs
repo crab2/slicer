@@ -1,8 +1,9 @@
 use crate::domain::pdf_structure::PdfPageGeometry;
 use crate::errors::{AppError, AppResult};
+use image::ImageFormat;
 use pdfium_render::prelude::*;
 use std::fs::File;
-use std::io::Read;
+use std::io::{Cursor, Read};
 use std::path::Path;
 
 pub const MAX_PDF_PAGE_COUNT: usize = 10_000;
@@ -18,6 +19,9 @@ pub trait PdfRenderer: Send + Sync {
 }
 
 pub struct PdfiumRenderer;
+
+pub const SEARCH_PREVIEW_WIDTH: i32 = 1_400;
+pub const SEARCH_PREVIEW_MAX_HEIGHT: i32 = 2_000;
 
 impl PdfRenderer for PdfiumRenderer {
     fn inspect_pdf(&self, pdf_path: &Path) -> AppResult<Vec<PdfPageMetadata>> {
@@ -97,6 +101,88 @@ impl PdfRenderer for PdfiumRenderer {
 
         Ok(pages)
     }
+}
+
+pub fn render_pdf_page_to_png(pdf_bytes: &[u8], page_number: i64) -> AppResult<Vec<u8>> {
+    let pdfium = load_pdfium()?;
+    let document = pdfium
+        .load_pdf_from_byte_slice(pdf_bytes, None)
+        .map_err(|error| {
+            AppError::new(
+                "pdf_preview_load_failed",
+                "无法加载搜索预览 PDF。",
+                "search",
+                true,
+            )
+            .with_details(error.to_string())
+        })?;
+    let page_count = usize::from(document.pages().len());
+    validate_pdf_page_count(page_count)?;
+    let page_index = validate_page_number(page_number, page_count)?;
+    let page = document.pages().get(page_index).map_err(|error| {
+        AppError::new(
+            "pdf_preview_page_read_failed",
+            "无法读取搜索结果所在页面。",
+            "search",
+            true,
+        )
+        .with_details(error.to_string())
+    })?;
+    let bitmap = page
+        .render_with_config(
+            &PdfRenderConfig::new()
+                .set_target_width(SEARCH_PREVIEW_WIDTH)
+                .set_maximum_height(SEARCH_PREVIEW_MAX_HEIGHT),
+        )
+        .map_err(|error| {
+            AppError::new(
+                "pdf_preview_render_failed",
+                "搜索结果页面渲染失败。",
+                "search",
+                true,
+            )
+            .with_details(error.to_string())
+        })?;
+    let mut output = Cursor::new(Vec::new());
+    bitmap
+        .as_image()
+        .write_to(&mut output, ImageFormat::Png)
+        .map_err(|error| {
+            AppError::new(
+                "pdf_preview_encode_failed",
+                "搜索结果页面编码失败。",
+                "search",
+                true,
+            )
+            .with_details(error.to_string())
+        })?;
+    Ok(output.into_inner())
+}
+
+fn validate_page_number(page_number: i64, page_count: usize) -> AppResult<PdfPageIndex> {
+    let page_number = usize::try_from(page_number).map_err(|_| {
+        AppError::new(
+            "pdf_preview_page_out_of_range",
+            "搜索结果页码超出 PDF 范围。",
+            "search",
+            false,
+        )
+        .with_details(format!(
+            "page_number={page_number}; page_count={page_count}"
+        ))
+    })?;
+    if page_number == 0 || page_number > page_count {
+        return Err(AppError::new(
+            "pdf_preview_page_out_of_range",
+            "搜索结果页码超出 PDF 范围。",
+            "search",
+            false,
+        )
+        .with_details(format!(
+            "page_number={page_number}; page_count={page_count}"
+        )));
+    }
+    Ok((page_number - 1) as PdfPageIndex)
 }
 
 fn validate_pdf_page_count(page_count: usize) -> AppResult<()> {
@@ -181,7 +267,9 @@ mod hex {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_pdf_page_count, MAX_PDF_PAGE_COUNT};
+    use super::{
+        render_pdf_page_to_png, validate_page_number, validate_pdf_page_count, MAX_PDF_PAGE_COUNT,
+    };
 
     #[test]
     fn rejects_empty_and_oversized_pdf_page_counts() {
@@ -196,5 +284,26 @@ mod tests {
                 .code,
             "pdf_page_count_limit_exceeded"
         );
+    }
+
+    #[test]
+    fn validates_one_based_search_preview_page_numbers() {
+        assert_eq!(validate_page_number(1, 4).expect("first page"), 0);
+        assert_eq!(validate_page_number(4, 4).expect("last page"), 3);
+        for invalid in [0, -1, 5] {
+            assert_eq!(
+                validate_page_number(invalid, 4)
+                    .expect_err("invalid page")
+                    .code,
+                "pdf_preview_page_out_of_range"
+            );
+        }
+    }
+
+    #[test]
+    fn renders_only_the_requested_pdf_page_to_memory_png() {
+        let pdf = include_bytes!("../../../tmp/pdfs/structured-retrieval-fixture.pdf");
+        let png = render_pdf_page_to_png(pdf, 2).expect("render second page");
+        assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 }
