@@ -1,26 +1,26 @@
 installation:
-  version: 6.7.1
+  version: 6.10.0
   installDate: 2026-05-14T05:35:58.941Z
-  lastUpdated: 2026-05-18T15:51:35.445Z
+  lastUpdated: 2026-07-30T01:28:58.540Z
 modules:
   - name: core
-    version: 6.7.1
+    version: 6.10.0
     installDate: 2026-05-14T05:35:57.655Z
-    lastUpdated: 2026-05-18T15:51:35.413Z
+    lastUpdated: 2026-07-30T01:28:58.397Z
     source: built-in
     npmPackage: null
     repoUrl: null
   - name: bmm
-    version: 6.7.1
+    version: 6.10.0
     installDate: 2026-05-14T05:35:57.323Z
-    lastUpdated: 2026-05-18T15:51:35.417Z
+    lastUpdated: 2026-07-30T01:28:58.462Z
     source: built-in
     npmPackage: null
     repoUrl: null
   - name: bmb
     version: v1.8.0
     installDate: 2026-05-14T05:35:57.975Z
-    lastUpdated: 2026-05-18T15:51:35.423Z
+    lastUpdated: 2026-07-30T01:28:58.484Z
     source: external
     npmPackage: bmad-builder
     repoUrl: https://github.com/bmad-code-org/bmad-builder
@@ -29,16 +29,34 @@ modules:
   - name: cis
     version: v0.2.0
     installDate: 2026-05-14T05:35:58.111Z
-    lastUpdated: 2026-05-18T15:51:35.429Z
+    lastUpdated: 2026-07-30T01:28:58.501Z
     source: external
     npmPackage: bmad-creative-intelligence-suite
     repoUrl: https://github.com/bmad-code-org/bmad-module-creative-intelligence-suite
     channel: pinned
     sha: 14a63b893c07173b7a6cfe0fb6a9a72ba51d3cf1
+  - name: bmad-loop
+    version: v0.9.0
+    installDate: 2026-07-30T01:28:52.700Z
+    lastUpdated: 2026-07-30T01:28:58.513Z
+    source: external
+    npmPackage: null
+    repoUrl: https://github.com/bmad-code-org/bmad-loop
+    channel: stable
+    sha: 72551742617b4e1c9cb72d2038dc67ce973f7eea
+  - name: wds
+    version: v0.4.3
+    installDate: 2026-07-30T01:28:57.205Z
+    lastUpdated: 2026-07-30T01:28:58.518Z
+    source: external
+    npmPackage: bmad-wds
+    repoUrl: https://github.com/bmad-code-org/bmad-method-wds-expansion
+    channel: stable
+    sha: cc16f09fcfab26d35635af1491f36a38a8431c8d
   - name: baut
     version: 1.14.2
     installDate: 2026-05-14T05:35:58.312Z
-    lastUpdated: 2026-05-18T15:51:35.445Z
+    lastUpdated: 2026-07-30T01:28:58.540Z
     source: unknown
     npmPackage: null
     repoUrl: null

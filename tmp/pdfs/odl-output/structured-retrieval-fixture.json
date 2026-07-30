@@ -1,0 +1,277 @@
+{
+  "file name" : "structured-retrieval-fixture.pdf",
+  "number of pages" : 2,
+  "author" : "SLICER verification",
+  "title" : "Structured PDF Retrieval Fixture",
+  "creation date" : "D:20260730015717+08'00'",
+  "modification date" : "D:20260730015717+08'00'",
+  "kids" : [ {
+    "type" : "heading",
+    "pdfua_tag" : "H1",
+    "id" : 1,
+    "level" : "Doctitle",
+    "page number" : 1,
+    "bounding box" : [ 158.606, 765.786, 436.67, 787.206 ],
+    "heading level" : 1,
+    "font" : "Helvetica-Bold",
+    "font size" : 18.0,
+    "text color" : "[0.0, 0.0, 0.0]",
+    "content" : "Structured PDF Retrieval Fixture"
+  }, {
+    "type" : "paragraph",
+    "pdfua_tag" : "P",
+    "id" : 2,
+    "page number" : 1,
+    "bounding box" : [ 54.0, 717.64, 459.14, 741.2 ],
+    "font" : "Helvetica",
+    "font size" : 10.0,
+    "text color" : "[0.0, 0.0, 0.0]",
+    "content" : "This paragraph must be indexed directly from the PDF structure. The verification keyword is ORCHID-MODULE-ALPHA."
+  }, {
+    "type" : "table",
+    "pdfua_tag" : "Table",
+    "id" : 3,
+    "level" : "1",
+    "page number" : 1,
+    "bounding box" : [ 67.263, 629.515, 528.013, 702.265 ],
+    "number of rows" : 4,
+    "number of columns" : 2,
+    "rows" : [ {
+      "type" : "table row",
+      "row number" : 1,
+      "cells" : [ {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 67.638, 683.89, 197.638, 701.89 ],
+        "row number" : 1,
+        "column number" : 1,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 1,
+          "page number" : 1,
+          "bounding box" : [ 73.638, 686.61, 108.638, 698.51 ],
+          "font" : "Helvetica-Bold",
+          "font size" : 10.0,
+          "text color" : "[1.0, 1.0, 1.0]",
+          "content" : "Module"
+        } ]
+      }, {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 197.638, 683.89, 527.638, 701.89 ],
+        "row number" : 1,
+        "column number" : 2,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 2,
+          "page number" : 1,
+          "bounding box" : [ 203.638, 686.61, 292.558, 698.51 ],
+          "font" : "Helvetica-Bold",
+          "font size" : 10.0,
+          "text color" : "[1.0, 1.0, 1.0]",
+          "content" : "Expected behavior"
+        } ]
+      } ]
+    }, {
+      "type" : "table row",
+      "row number" : 2,
+      "cells" : [ {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 67.638, 665.89, 197.638, 683.89 ],
+        "row number" : 2,
+        "column number" : 1,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 3,
+          "page number" : 1,
+          "bounding box" : [ 73.638, 668.64, 120.328, 680.2 ],
+          "font" : "Helvetica",
+          "font size" : 10.0,
+          "text color" : "[0.0, 0.0, 0.0]",
+          "content" : "Paragraph"
+        } ]
+      }, {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 197.638, 665.89, 527.638, 683.89 ],
+        "row number" : 2,
+        "column number" : 2,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 4,
+          "page number" : 1,
+          "bounding box" : [ 203.638, 668.64, 348.158, 680.2 ],
+          "font" : "Helvetica",
+          "font size" : 10.0,
+          "text color" : "[0.0, 0.0, 0.0]",
+          "content" : "Indexed without a model request"
+        } ]
+      } ]
+    }, {
+      "type" : "table row",
+      "row number" : 3,
+      "cells" : [ {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 67.638, 647.89, 197.638, 665.89 ],
+        "row number" : 3,
+        "column number" : 1,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 5,
+          "page number" : 1,
+          "bounding box" : [ 73.638, 650.64, 101.428, 662.2 ],
+          "font" : "Helvetica",
+          "font size" : 10.0,
+          "text color" : "[0.0, 0.0, 0.0]",
+          "content" : "Image"
+        } ]
+      }, {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 197.638, 647.89, 527.638, 665.89 ],
+        "row number" : 3,
+        "column number" : 2,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 6,
+          "page number" : 1,
+          "bounding box" : [ 203.638, 650.64, 430.398, 662.2 ],
+          "font" : "Helvetica",
+          "font size" : 10.0,
+          "text color" : "[0.0, 0.0, 0.0]",
+          "content" : "Analyzed only when visual enrichment is requested"
+        } ]
+      } ]
+    }, {
+      "type" : "table row",
+      "row number" : 4,
+      "cells" : [ {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 67.638, 629.89, 197.638, 647.89 ],
+        "row number" : 4,
+        "column number" : 1,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 7,
+          "page number" : 1,
+          "bounding box" : [ 73.638, 632.64, 111.438, 644.2 ],
+          "font" : "Helvetica",
+          "font size" : 10.0,
+          "text color" : "[0.0, 0.0, 0.0]",
+          "content" : "Location"
+        } ]
+      }, {
+        "type" : "table cell",
+        "pdfua_tag" : "TD",
+        "page number" : 1,
+        "bounding box" : [ 197.638, 629.89, 527.638, 647.89 ],
+        "row number" : 4,
+        "column number" : 2,
+        "row span" : 1,
+        "column span" : 1,
+        "kids" : [ {
+          "type" : "paragraph",
+          "pdfua_tag" : "P",
+          "id" : 8,
+          "page number" : 1,
+          "bounding box" : [ 203.638, 632.64, 422.628, 644.2 ],
+          "font" : "Helvetica",
+          "font size" : 10.0,
+          "text color" : "[0.0, 0.0, 0.0]",
+          "content" : "Returned with page number and normalized bbox"
+        } ]
+      } ]
+    } ]
+  }, {
+    "type" : "heading",
+    "pdfua_tag" : "H2",
+    "id" : 4,
+    "level" : "Subtitle",
+    "page number" : 1,
+    "bounding box" : [ 54.0, 578.698, 309.192, 595.358 ],
+    "heading level" : 2,
+    "font" : "Helvetica-Bold",
+    "font size" : 14.0,
+    "text color" : "[0.0, 0.0, 0.0]",
+    "content" : "Two visual modules on the same page"
+  }, {
+    "type" : "image",
+    "pdfua_tag" : "Figure",
+    "id" : 5,
+    "page number" : 1,
+    "bounding box" : [ 66.638, 447.39, 291.638, 559.89 ],
+    "alt_source" : "missing",
+    "source" : "images/imageFile1.png"
+  }, {
+    "type" : "image",
+    "pdfua_tag" : "Figure",
+    "id" : 6,
+    "page number" : 1,
+    "bounding box" : [ 301.638, 447.39, 526.638, 559.89 ],
+    "alt_source" : "missing",
+    "source" : "images/imageFile2.png"
+  }, {
+    "type" : "paragraph",
+    "pdfua_tag" : "P",
+    "id" : 7,
+    "page number" : 1,
+    "bounding box" : [ 66.638, 427.14, 442.808, 438.7 ],
+    "font" : "Helvetica",
+    "font size" : 10.0,
+    "text color" : "[0.0, 0.0, 0.0]",
+    "content" : "Figure 1. Red quarterly totals. Figure 2. Green quarterly totals."
+  }, {
+    "type" : "heading",
+    "pdfua_tag" : "H1",
+    "id" : 8,
+    "level" : "Doctitle",
+    "page number" : 2,
+    "bounding box" : [ 162.584, 765.786, 432.692, 787.206 ],
+    "heading level" : 1,
+    "font" : "Helvetica-Bold",
+    "font size" : 18.0,
+    "text color" : "[0.0, 0.0, 0.0]",
+    "content" : "Second page fallback reference"
+  }, {
+    "type" : "paragraph",
+    "pdfua_tag" : "P",
+    "id" : 9,
+    "page number" : 2,
+    "bounding box" : [ 54.0, 727.64, 540.3, 739.2 ],
+    "font" : "Helvetica",
+    "font size" : 10.0,
+    "text color" : "[0.0, 0.0, 0.0]",
+    "content" : "This second page provides a separate searchable module. The verification keyword is COBALT-PAGE-BETA."
+  } ]
+}
