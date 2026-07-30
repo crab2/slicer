@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+use crate::errors::AppError;
+
 pub const PAGE_ANALYSIS_SCHEMA_VERSION: &str = "page_analysis_v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -132,5 +134,6 @@ pub struct AnalysisBatchResultDto {
     pub failed_visual_modules: i64,
     pub skipped_visual_modules: i64,
     pub status: String,
+    pub error: Option<AppError>,
     pub updated_at: String,
 }

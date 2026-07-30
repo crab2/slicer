@@ -7,6 +7,7 @@ use crate::providers::model::provider::{
 use crate::services::settings_service::SettingsService;
 use base64::Engine;
 use reqwest::header::{ACCEPT, CONTENT_TYPE};
+use reqwest::StatusCode;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::io::Read;
@@ -112,7 +113,15 @@ impl OpenAIProvider {
             .header(ACCEPT, "application/json")
             .header(CONTENT_TYPE, "application/json")
             .send()
-            .map_err(|_| provider_error("model_list_request_failed", true, "request_failed"))?;
+            .map_err(|error| {
+                openai_request_error(
+                    "model_list_request_failed",
+                    "settings",
+                    "获取模型失败",
+                    "openai_models",
+                    &error,
+                )
+            })?;
 
         let status = response.status();
         if let Some(content_length) = response.content_length() {
@@ -127,23 +136,14 @@ impl OpenAIProvider {
         let response_text = read_limited_response(&mut response)?;
 
         if !status.is_success() {
-            let error_preview = response_preview(&response_text);
-            let status_code = status.as_u16();
-            let key_fingerprint = api_key_fingerprint(api_key);
-            return Err(AppError::new(
+            return Err(openai_http_status_error(
                 "model_list_http_status_failed",
-                format!("OpenAI 模型列表返回非成功状态（HTTP {status_code}）。"),
                 "settings",
-                true,
-            )
-            .with_details(format!(
-                "status={}; response_bytes={}; response_preview={}; key_fingerprint={}; endpoint={}; endpoint_kind=openai_models",
-                status_code,
-                response_text.len(),
-                error_preview,
-                key_fingerprint,
-                Self::models_endpoint(settings)?
-            )));
+                "获取模型失败",
+                "openai_models",
+                status,
+                &response_text,
+            ));
         }
 
         parse_model_list_response(&response_text)
@@ -180,7 +180,15 @@ impl ModelProvider for OpenAIProvider {
             .bearer_auth(api_key)
             .json(&body)
             .send()
-            .map_err(|_| provider_error("model_request_failed", true, "request_failed"))?;
+            .map_err(|error| {
+                openai_request_error(
+                    "model_request_failed",
+                    "analysis_provider",
+                    "模型分析失败",
+                    "openai",
+                    &error,
+                )
+            })?;
 
         let status = response.status();
         if let Some(content_length) = response.content_length() {
@@ -198,23 +206,14 @@ impl ModelProvider for OpenAIProvider {
         let response_text = read_limited_response(&mut response)?;
 
         if !status.is_success() {
-            let error_preview = if response_text.len() > 500 {
-                format!("{}...", &response_text[..500])
-            } else {
-                response_text.clone()
-            };
-            return Err(AppError::new(
+            return Err(openai_http_status_error(
                 "model_http_status_failed",
-                "OpenAI provider 返回非成功状态。",
                 "analysis_provider",
-                true,
-            )
-            .with_details(format!(
-                "status={}; response_bytes={}; response_preview={}; endpoint_kind=openai",
-                status.as_u16(),
-                response_text.len(),
-                error_preview
-            )));
+                "模型分析失败",
+                "openai",
+                status,
+                &response_text,
+            ));
         }
 
         Ok(ModelAnalysisResponse {
@@ -360,34 +359,103 @@ fn parse_model_list_response(response_text: &str) -> AppResult<ModelListDto> {
     })
 }
 
-fn response_preview(response_text: &str) -> String {
-    response_text.chars().take(500).collect()
+fn openai_request_error(
+    code: &str,
+    stage: &str,
+    operation: &str,
+    endpoint_kind: &str,
+    error: &reqwest::Error,
+) -> AppError {
+    let (message, failure_kind) = if error.is_timeout() {
+        (
+            format!("{operation}：连接模型服务超时，请检查网络后重试。"),
+            "timeout",
+        )
+    } else if error.is_connect() {
+        (
+            format!("{operation}：无法连接模型服务，请检查网络、Base URL 和服务状态。"),
+            "connect",
+        )
+    } else if error.is_request() {
+        (
+            format!("{operation}：模型服务请求无效，请检查 Base URL 和 Endpoint。"),
+            "request",
+        )
+    } else {
+        (
+            format!("{operation}：模型服务请求失败，请检查网络后重试。"),
+            "unknown",
+        )
+    };
+
+    AppError::new(code, message, stage, true).with_details(format!(
+        "failure_kind={failure_kind}; endpoint_kind={endpoint_kind}"
+    ))
 }
 
-fn api_key_fingerprint(key: &str) -> String {
-    let chars: Vec<char> = key.chars().collect();
-    if chars.len() <= 8 {
-        return format!("len={}", chars.len());
-    }
-    let prefix: String = chars.iter().take(4).collect();
-    let suffix: String = chars
-        .iter()
-        .rev()
-        .take(4)
-        .collect::<Vec<_>>()
-        .into_iter()
-        .rev()
-        .collect();
-    format!("len={}; prefix={prefix}; suffix={suffix}", chars.len())
+fn openai_http_status_error(
+    code: &str,
+    stage: &str,
+    operation: &str,
+    endpoint_kind: &str,
+    status: StatusCode,
+    response_text: &str,
+) -> AppError {
+    let response_lower = response_text.to_ascii_lowercase();
+    let subscription_missing = response_lower.contains("subscription_not_found")
+        || response_lower.contains("no active subscription");
+    let model_missing = status == StatusCode::NOT_FOUND
+        && endpoint_kind == "openai"
+        && (response_lower.contains("model_not_found")
+            || response_lower.contains("model not found")
+            || response_lower.contains("model does not exist"));
+    let message = if subscription_missing {
+        format!(
+            "{operation}：当前 API Key 所属账号或分组没有可用订阅，请在服务商后台恢复订阅，或切换到可用模型配置。"
+        )
+    } else if model_missing {
+        format!("{operation}：当前模型不存在或无权访问，请检查 Model Name 和模型授权。")
+    } else {
+        match status {
+            StatusCode::UNAUTHORIZED => {
+                format!("{operation}：API Key 无效或已过期，请检查当前模型配置中的密钥。")
+            }
+            StatusCode::FORBIDDEN => format!(
+                "{operation}：当前 API Key 没有访问该模型服务的权限，请检查账号、分组和模型授权。"
+            ),
+            StatusCode::NOT_FOUND => {
+                format!("{operation}：模型接口不存在，请检查 Base URL 和自定义 Endpoint。")
+            }
+            StatusCode::TOO_MANY_REQUESTS => {
+                format!("{operation}：请求过于频繁或额度已用尽，请稍后重试或检查服务商额度。")
+            }
+            status if status.is_server_error() => {
+                format!(
+                    "{operation}：模型服务暂时不可用（HTTP {}），请稍后重试。",
+                    status.as_u16()
+                )
+            }
+            _ => format!(
+                "{operation}：模型服务返回 HTTP {}，请检查服务配置。",
+                status.as_u16()
+            ),
+        }
+    };
+    let retryable = !subscription_missing
+        && (matches!(
+            status,
+            StatusCode::REQUEST_TIMEOUT | StatusCode::TOO_MANY_REQUESTS
+        ) || status.is_server_error());
+
+    AppError::new(code, message, stage, retryable).with_details(format!(
+        "status={}; response_bytes={}; endpoint_kind={endpoint_kind}",
+        status.as_u16(),
+        response_text.len()
+    ))
 }
 
 fn extract_openai_content(response_text: &str) -> AppResult<String> {
     let parsed: Value = serde_json::from_str(response_text).map_err(|err| {
-        let preview = if response_text.len() > 500 {
-            format!("{}...", &response_text[..500])
-        } else {
-            response_text.to_string()
-        };
         AppError::new(
             "model_response_json_invalid",
             "OpenAI provider 响应不是可解析 JSON。",
@@ -395,11 +463,10 @@ fn extract_openai_content(response_text: &str) -> AppResult<String> {
             true,
         )
         .with_details(format!(
-            "summary=json parse failed at line {} column {}; response_bytes={}; response_preview={}",
+            "summary=json parse failed at line {} column {}; response_bytes={}",
             err.line(),
             err.column(),
-            response_text.len(),
-            preview
+            response_text.len()
         ))
     })?;
 
@@ -411,22 +478,13 @@ fn extract_openai_content(response_text: &str) -> AppResult<String> {
         .and_then(|content| content.as_str())
         .map(|s| s.to_string())
         .ok_or_else(|| {
-            let preview = if response_text.len() > 500 {
-                format!("{}...", &response_text[..500])
-            } else {
-                response_text.to_string()
-            };
             AppError::new(
                 "model_response_format_invalid",
                 "OpenAI 响应缺少 choices[0].message.content 字段。",
                 "analysis_provider",
                 true,
             )
-            .with_details(format!(
-                "response_bytes={}; response_preview={}",
-                response_text.len(),
-                preview
-            ))
+            .with_details(format!("response_bytes={}", response_text.len()))
         })
 }
 
@@ -443,12 +501,13 @@ fn provider_error(code: &str, retryable: bool, summary: &str) -> AppError {
 #[cfg(test)]
 mod tests {
     use super::{
-        api_key_fingerprint, extract_openai_content, parse_model_list_response, OpenAIProvider,
-        MAX_COMPLETION_TOKENS,
+        extract_openai_content, openai_http_status_error, parse_model_list_response,
+        OpenAIProvider, MAX_COMPLETION_TOKENS,
     };
     use crate::domain::settings::AppSettingsDto;
     use crate::providers::model::provider::ModelAnalysisRequest;
     use crate::providers::model::schema_validator::ExpectedPageContext;
+    use reqwest::StatusCode;
 
     fn expected_page() -> ExpectedPageContext {
         ExpectedPageContext {
@@ -583,12 +642,75 @@ mod tests {
     }
 
     #[test]
-    fn api_key_fingerprint_does_not_expose_full_secret() {
-        assert_eq!(
-            api_key_fingerprint("sk-1234567890abcd"),
-            "len=17; prefix=sk-1; suffix=abcd"
+    fn subscription_failure_has_actionable_message() {
+        let error = openai_http_status_error(
+            "model_http_status_failed",
+            "analysis_provider",
+            "模型分析失败",
+            "openai",
+            StatusCode::FORBIDDEN,
+            r#"{"code":"SUBSCRIPTION_NOT_FOUND","message":"No active subscription found for this group"}"#,
         );
-        assert_eq!(api_key_fingerprint("short"), "len=5");
+
+        assert!(error.message.contains("账号或分组没有可用订阅"));
+        assert!(error.message.contains("恢复订阅"));
+        assert_eq!(error.code, "model_http_status_failed");
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn common_http_failures_have_actionable_messages() {
+        for (status, expected) in [
+            (StatusCode::UNAUTHORIZED, "API Key 无效或已过期"),
+            (StatusCode::FORBIDDEN, "没有访问该模型服务的权限"),
+            (StatusCode::NOT_FOUND, "检查 Base URL 和自定义 Endpoint"),
+            (StatusCode::TOO_MANY_REQUESTS, "请求过于频繁或额度已用尽"),
+        ] {
+            let error = openai_http_status_error(
+                "model_list_http_status_failed",
+                "settings",
+                "获取模型失败",
+                "openai_models",
+                status,
+                "{}",
+            );
+            assert!(error.message.contains(expected));
+            assert_eq!(error.retryable, status == StatusCode::TOO_MANY_REQUESTS);
+        }
+    }
+
+    #[test]
+    fn model_not_found_points_to_model_name() {
+        let error = openai_http_status_error(
+            "model_http_status_failed",
+            "analysis_provider",
+            "模型分析失败",
+            "openai",
+            StatusCode::NOT_FOUND,
+            r#"{"code":"model_not_found","message":"model does not exist"}"#,
+        );
+
+        assert!(error.message.contains("检查 Model Name"));
+        assert!(!error.retryable);
+    }
+
+    #[test]
+    fn http_failure_details_omit_response_body() {
+        let error = openai_http_status_error(
+            "model_list_http_status_failed",
+            "settings",
+            "获取模型失败",
+            "openai_models",
+            StatusCode::UNAUTHORIZED,
+            r#"{"api_key":"sk-secret"}"#,
+        );
+
+        let details = error.details.expect("safe details");
+        assert!(details.contains("status=401"));
+        assert!(details.contains("response_bytes="));
+        assert!(!details.contains("response_preview"));
+        assert!(!details.contains("api_key"));
+        assert!(!details.contains("sk-secret"));
     }
 
     #[test]
@@ -596,5 +718,6 @@ mod tests {
         let raw = r#"{"choices":[{"message":{}}]}"#;
         let err = extract_openai_content(raw).expect_err("missing content");
         assert_eq!(err.code, "model_response_format_invalid");
+        assert!(!err.details.unwrap_or_default().contains(raw));
     }
 }

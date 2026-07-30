@@ -8,6 +8,7 @@ import type { NavigationContext } from "../../app/navigation";
 import type {
   AnalysisBatchResultDto,
   AnalysisResultDto,
+  AppErrorDto,
   DocumentDto,
   ModelConfigurationStatusDto,
   PageWorkbenchDto,
@@ -32,6 +33,13 @@ interface ReanalysisSummary {
   retryFailedOnly: boolean;
 }
 
+interface AnalysisDisplayError {
+  title: string;
+  message: string;
+  details?: string | null;
+  correlationId?: string | null;
+}
+
 export function AnalysisPage({
   workspaceReady,
   isActive,
@@ -44,7 +52,7 @@ export function AnalysisPage({
   const [showPrivacyNotice, setShowPrivacyNotice] = useState(false);
   const [isAcceptingPrivacy, setIsAcceptingPrivacy] = useState(false);
   const [analysisReadyMessage, setAnalysisReadyMessage] = useState<string | null>(null);
-  const [analysisError, setAnalysisError] = useState<{ message: string; correlationId?: string | null } | null>(null);
+  const [analysisError, setAnalysisError] = useState<AnalysisDisplayError | null>(null);
   const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
   const [pendingAction, setPendingAction] = useState<"new-pages" | "reanalysis" | null>(null);
@@ -151,9 +159,11 @@ export function AnalysisPage({
 
   async function executeAnalyzeNewPages() {
     setIsBatchAnalyzing(true);
+    setAnalysisError(null);
     try {
       const result = await tauriClient.analyzeNewPages();
       setAnalysisReadyMessage(formatBatchMessage("新页面批量分析完成", result));
+      setAnalysisError(getBatchResultError(result));
       await refreshDocuments();
     } catch (error) {
       setAnalysisError(extractError(error));
@@ -169,6 +179,7 @@ export function AnalysisPage({
     }
 
     setIsReanalyzing(true);
+    setAnalysisError(null);
     try {
       if (navigationContext.selected_kind === "document" || navigationContext.selected_kind === "document_batch") {
         const results: AnalysisBatchResultDto[] = [];
@@ -184,6 +195,9 @@ export function AnalysisPage({
             navigationContext.retry_failed_only ? "失败项重试完成" : "默认重分析完成",
             results,
           ),
+        );
+        setAnalysisError(
+          results.map(getBatchResultError).find((error) => error !== null) ?? null,
         );
       } else {
         const results: AnalysisResultDto[] = [];
@@ -279,8 +293,9 @@ export function AnalysisPage({
         ) : null}
         {analysisError ? (
           <ErrorMessage
-            title="分析失败"
+            title={analysisError.title}
             message={analysisError.message}
+            details={analysisError.details}
             correlationId={analysisError.correlationId}
           />
         ) : null}
@@ -679,8 +694,20 @@ export function formatCombinedBatchMessage(prefix: string, results: AnalysisBatc
     status: results.some((result) => result.status.includes("failed"))
       ? "succeeded_with_failures"
       : "succeeded",
+    error: results.find((result) => result.error)?.error ?? null,
     updated_at: results[results.length - 1]?.updated_at ?? "",
   });
+}
+
+export function getBatchResultError(
+  result: AnalysisBatchResultDto,
+): AnalysisDisplayError | null {
+  return result.error
+    ? toDisplayError(
+        result.error,
+        result.status === "succeeded_with_failures" ? "分析部分完成" : "分析失败",
+      )
+    : null;
 }
 
 function formatPageAnalysisMessage(prefix: string, results: AnalysisResultDto[]) {
@@ -689,14 +716,24 @@ function formatPageAnalysisMessage(prefix: string, results: AnalysisResultDto[])
   return `${prefix}：共 ${results.length} 页，成功 ${succeeded} 页，失败 ${failed} 页。`;
 }
 
-function extractError(error: unknown): { message: string; correlationId?: string | null } {
+function toDisplayError(error: AppErrorDto, title: string): AnalysisDisplayError {
+  return {
+    title,
+    message: error.message,
+    details: error.details,
+    correlationId: error.correlation_id,
+  };
+}
+
+function extractError(error: unknown): AnalysisDisplayError {
   if (typeof error === "object" && error !== null) {
     const e = error as Record<string, unknown>;
     const msg = typeof e.message === "string" ? e.message : null;
+    const details = typeof e.details === "string" ? e.details : null;
     const cid = typeof e.correlation_id === "string" ? e.correlation_id : null;
-    if (msg) return { message: msg, correlationId: cid };
+    if (msg) return { title: "分析失败", message: msg, details, correlationId: cid };
   }
-  if (error instanceof Error) return { message: error.message };
-  if (typeof error === "string") return { message: error };
-  return { message: "任务命令调用失败，请稍后重试。" };
+  if (error instanceof Error) return { title: "分析失败", message: error.message };
+  if (typeof error === "string") return { title: "分析失败", message: error };
+  return { title: "分析失败", message: "任务命令调用失败，请稍后重试。" };
 }

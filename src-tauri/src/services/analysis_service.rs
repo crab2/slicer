@@ -365,6 +365,7 @@ impl AnalysisService {
             failed_visual_modules: 0,
             skipped_visual_modules: 0,
             status: "succeeded".to_string(),
+            error: None,
             updated_at: Utc::now().to_rfc3339(),
         })
     }
@@ -1134,6 +1135,7 @@ impl AnalysisService {
                 failed_visual_modules: 0,
                 skipped_visual_modules: 0,
                 status: "succeeded".to_string(),
+                error: None,
                 updated_at: Utc::now().to_rfc3339(),
             });
         }
@@ -1152,7 +1154,9 @@ impl AnalysisService {
         )?;
 
         let worker_count = usize::from(analysis_concurrency.clamp(1, 8)).min(items.len());
-        let queue = Arc::new(Mutex::new(VecDeque::from(items)));
+        let queue = Arc::new(Mutex::new(VecDeque::from(
+            items.into_iter().enumerate().collect::<Vec<_>>(),
+        )));
         let counters = Arc::new(Mutex::new(BatchCounters::default()));
         let progress_error = Arc::new(Mutex::new(None));
 
@@ -1174,7 +1178,9 @@ impl AnalysisService {
                             let mut queue = queue.lock().expect("analysis queue lock");
                             queue.pop_front()
                         };
-                        let Some(item) = item else { break };
+                        let Some((item_index, item)) = item else {
+                            break;
+                        };
                         let item_id = item.id().to_string();
                         let item_kind = item.kind();
                         let outcome = match item {
@@ -1200,7 +1206,7 @@ impl AnalysisService {
 
                         let progress = {
                             let mut counters = counters.lock().expect("analysis counters lock");
-                            counters.record(item_kind, outcome);
+                            counters.record(item_index, item_kind, outcome);
                             counters.last_unit_id = Some(item_id);
                             ((counters.completed_units * 98 / total_units) + 1)
                                 .min(99)
@@ -1291,6 +1297,7 @@ impl AnalysisService {
             failed_visual_modules: counters.visual_modules.failed,
             skipped_visual_modules: counters.visual_modules.skipped,
             status: final_status.to_string(),
+            error: counters.first_error.map(|(_, error)| error),
             updated_at: Utc::now().to_rfc3339(),
         })
     }
@@ -1331,7 +1338,7 @@ impl AnalysisService {
                         &err,
                     );
                 }
-                BatchPageOutcome::Failed
+                BatchPageOutcome::Failed(err)
             }
         }
     }
@@ -1348,7 +1355,7 @@ impl AnalysisService {
             Err(error) if error.code == "visual_module_analysis_already_running" => {
                 return BatchPageOutcome::Skipped;
             }
-            Err(_) => return BatchPageOutcome::Failed,
+            Err(error) => return BatchPageOutcome::Failed(error),
         };
         match Self::analyze_visual_block_core(
             workspace,
@@ -1371,7 +1378,7 @@ impl AnalysisService {
                         "visual-module failure could not be persisted"
                     );
                 }
-                BatchPageOutcome::Failed
+                BatchPageOutcome::Failed(error)
             }
         }
     }
@@ -1797,10 +1804,16 @@ struct BatchCounters {
     pages: BatchOutcomeCounters,
     visual_modules: BatchOutcomeCounters,
     last_unit_id: Option<String>,
+    first_error: Option<(usize, AppError)>,
 }
 
 impl BatchCounters {
-    fn record(&mut self, kind: BatchAnalysisItemKind, outcome: BatchPageOutcome) {
+    fn record(
+        &mut self,
+        item_index: usize,
+        kind: BatchAnalysisItemKind,
+        outcome: BatchPageOutcome,
+    ) {
         self.completed_units += 1;
         let counters = match kind {
             BatchAnalysisItemKind::Page => &mut self.pages,
@@ -1808,7 +1821,16 @@ impl BatchCounters {
         };
         match outcome {
             BatchPageOutcome::Succeeded => counters.succeeded += 1,
-            BatchPageOutcome::Failed => counters.failed += 1,
+            BatchPageOutcome::Failed(error) => {
+                counters.failed += 1;
+                let should_replace = match self.first_error.as_ref() {
+                    Some((first_index, _)) => item_index < *first_index,
+                    None => true,
+                };
+                if should_replace {
+                    self.first_error = Some((item_index, error));
+                }
+            }
             BatchPageOutcome::Skipped => counters.skipped += 1,
         }
     }
@@ -1833,16 +1855,18 @@ struct BatchOutcomeCounters {
     skipped: i64,
 }
 
-#[derive(Clone, Copy)]
 enum BatchPageOutcome {
     Succeeded,
-    Failed,
+    Failed(AppError),
     Skipped,
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{AnalysisService, MODEL_IMAGE_MAX_SIDE, MODEL_IMAGE_REENCODE_MIN_BYTES};
+    use super::{
+        AnalysisService, BatchAnalysisItemKind, BatchCounters, BatchPageOutcome,
+        MODEL_IMAGE_MAX_SIDE, MODEL_IMAGE_REENCODE_MIN_BYTES,
+    };
     use crate::api::state::ApiAppState;
     use crate::domain::analysis::PAGE_ANALYSIS_SCHEMA_VERSION;
     use crate::domain::pdf_structure::{
@@ -2728,6 +2752,39 @@ mod tests {
     }
 
     #[test]
+    fn batch_counters_choose_the_first_input_error_not_the_first_completed_error() {
+        let mut counters = BatchCounters::default();
+        counters.record(
+            1,
+            BatchAnalysisItemKind::Page,
+            BatchPageOutcome::Failed(AppError::new(
+                "second_input_failed_first",
+                "second input failed first",
+                "analysis",
+                true,
+            )),
+        );
+        counters.record(
+            0,
+            BatchAnalysisItemKind::Page,
+            BatchPageOutcome::Failed(AppError::new(
+                "first_input_failed_second",
+                "first input failed second",
+                "analysis",
+                true,
+            )),
+        );
+
+        assert_eq!(
+            counters
+                .first_error
+                .as_ref()
+                .map(|(_, error)| error.code.as_str()),
+            Some("first_input_failed_second")
+        );
+    }
+
+    #[test]
     fn batch_preserves_successes_when_one_page_fails() {
         let (service, root) = test_workspace();
         configure_mock(&service);
@@ -2750,6 +2807,10 @@ mod tests {
         assert_eq!(result.succeeded_pages, 1);
         assert_eq!(result.failed_pages, 1);
         assert_eq!(result.status, "succeeded_with_failures");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("page_image_read_failed")
+        );
         let layout = service.current_layout().expect("layout");
         let jobs = JobOrchestrator::new(layout).list_jobs().expect("jobs");
         let batch_job = jobs
@@ -2802,6 +2863,7 @@ mod tests {
             .expect("text-only structured PDF should not require a model");
         assert_eq!(result.total_pages, 0);
         assert_eq!(result.status, "succeeded");
+        assert!(result.error.is_none());
 
         let mut conn = service.get_db_connection().expect("connection");
         let pages = AnalysisRepository::list_workbench_pages(&mut conn, &document_id)
@@ -2868,6 +2930,10 @@ mod tests {
         assert_eq!(result.total_visual_modules, 2);
         assert_eq!(result.succeeded_visual_modules, 1);
         assert_eq!(result.failed_visual_modules, 1);
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("visual_module_source_image_missing")
+        );
         assert_eq!(provider.call_count(), 1);
         assert_eq!(
             *provider.dimensions.lock().expect("dimensions"),
@@ -2934,6 +3000,11 @@ mod tests {
             .expect("tampered image becomes an independent block failure");
 
         assert_eq!(result.failed_visual_modules, 1);
+        assert_eq!(result.status, "failed");
+        assert_eq!(
+            result.error.as_ref().map(|error| error.code.as_str()),
+            Some("visual_module_source_image_hash_mismatch")
+        );
         assert_eq!(provider.call_count(), 0);
         let _ = fs::remove_dir_all(root);
     }
@@ -3029,6 +3100,10 @@ mod tests {
         assert_eq!(first.succeeded_visual_modules, 1);
         assert_eq!(first.failed_visual_modules, 1);
         assert_eq!(first.status, "succeeded_with_failures");
+        assert_eq!(
+            first.error.as_ref().map(|error| error.code.as_str()),
+            Some("test_visual_provider_failure")
+        );
 
         let mut conn = service.get_db_connection().expect("connection");
         let pages = AnalysisRepository::list_workbench_pages(&mut conn, &document_id)
@@ -3042,6 +3117,7 @@ mod tests {
             AnalysisService::analyze_new_pages_with_provider(&service, Some(&default_batch))
                 .expect("failed blocks stay out of the default batch");
         assert_eq!(no_retry.total_visual_modules, 0);
+        assert!(no_retry.error.is_none());
         assert_eq!(default_batch.call_count(), 0);
 
         let retry = VisualModuleProvider::new(None);

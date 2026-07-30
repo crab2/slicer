@@ -9,6 +9,7 @@ import {
   formatAnalysisOverview,
   formatBatchMessage,
   formatCombinedBatchMessage,
+  getBatchResultError,
 } from "./AnalysisPage";
 
 function document(documentId: string): DocumentDto {
@@ -89,6 +90,7 @@ describe("analysis overview", () => {
       failed_visual_modules: 0,
       skipped_visual_modules: 1,
       status: "succeeded_with_failures",
+      error: null,
       updated_at: "2026-01-01T00:00:00Z",
     };
 
@@ -112,6 +114,7 @@ describe("analysis overview", () => {
       failed_visual_modules: 1,
       skipped_visual_modules: 0,
       status: "succeeded_with_failures",
+      error: null,
       updated_at: "2026-01-01T00:00:00Z",
     };
     const second = {
@@ -127,5 +130,40 @@ describe("analysis overview", () => {
     expect(message).toContain("视觉模块共 5 个");
     expect(message).toContain("成功 4 个");
     expect(message).toContain("失败 1 个");
+  });
+
+  it("maps the representative batch error to visible diagnostics", () => {
+    const result: AnalysisBatchResultDto = {
+      job_id: "job-failed",
+      total_pages: 0,
+      succeeded_pages: 0,
+      failed_pages: 0,
+      skipped_pages: 0,
+      total_visual_modules: 2,
+      succeeded_visual_modules: 0,
+      failed_visual_modules: 2,
+      skipped_visual_modules: 0,
+      status: "failed",
+      error: {
+        code: "model_http_status_failed",
+        message: "模型分析失败：当前 API Key 所属账号或分组没有可用订阅。",
+        stage: "analysis_provider",
+        retryable: true,
+        details: "status=403; endpoint_kind=openai",
+        correlation_id: "diagnostic-403",
+      },
+      updated_at: "2026-01-01T00:00:00Z",
+    };
+
+    expect(getBatchResultError(result)).toEqual({
+      title: "分析失败",
+      message: "模型分析失败：当前 API Key 所属账号或分组没有可用订阅。",
+      details: "status=403; endpoint_kind=openai",
+      correlationId: "diagnostic-403",
+    });
+
+    expect(
+      getBatchResultError({ ...result, status: "succeeded_with_failures" })?.title,
+    ).toBe("分析部分完成");
   });
 });

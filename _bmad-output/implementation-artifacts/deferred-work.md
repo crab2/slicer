@@ -52,3 +52,9 @@ Collected during story 1.4 review (2026-05-18).
 - source_spec: `_bmad-output/implementation-artifacts/spec-fix-doc-import-storage-id.md`
   summary: 受管目录创建成功后若规范化解析失败，调用方尚未取得清理所有权。
   evidence: `ensure_managed_document_dir` 先创建目录再调用 `resolve_existing_managed_document_dir`；后者失败时新目录可能残留，应在工作区布局层统一处理。
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-model-analysis-and-model-fetch-feedback.md`
+  summary: 批量分析记录单元失败时，失败状态持久化错误仍只写日志并继续。
+  evidence: `run_batch_page` 和 `run_batch_visual_module` 在原始分析失败后忽略二次持久化错误，数据库异常时单元可能无法稳定进入可重试失败状态，需要单独设计持久化失败的批次语义。
+- source_spec: `_bmad-output/implementation-artifacts/spec-fix-model-analysis-and-model-fetch-feedback.md`
+  summary: 多文档重分析遇到命令级异常时会停止后续文档并丢失已收集批次的汇总反馈。
+  evidence: `AnalysisPage.executeReanalysis` 的异常捕获位于文档循环外；这属于既有多文档编排行为，需要独立决定继续执行、合并统计和基础设施异常的展示规则。

@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
 pub struct AppError {
     pub code: String,
     pub message: String,
@@ -93,6 +93,23 @@ mod tests {
             "[redacted]"
         );
         assert_eq!(redact_secrets("x-api-key: sk-secret"), "[redacted]");
+        assert_eq!(redact_secrets(r#"{"api_key":"sk-secret"}"#), "[redacted]");
+        assert_eq!(
+            redact_secrets(r#"{"authorization":"Bearer sk-secret"}"#),
+            "[redacted]"
+        );
+        assert_eq!(
+            redact_secrets(r#"{"message":"api_key invalid","api_key":"sk-secret"}"#),
+            "[redacted]"
+        );
+        assert_eq!(
+            redact_secrets(r#"{"url":"data:image/png;base64,iVBORw0KGgoAAA"}"#),
+            "[redacted]"
+        );
+        assert_eq!(
+            redact_secrets("provider echoed sk-secret-value"),
+            "[redacted]"
+        );
     }
 
     #[test]
@@ -120,27 +137,51 @@ mod tests {
 }
 
 fn contains_secret_assignment(input: &str, lower: &str, key: &str) -> bool {
-    let Some(pos) = lower.find(key) else {
-        return false;
-    };
-    let after = input[pos + key.len()..].trim_start();
-    after.starts_with(':') || after.starts_with('=')
+    lower.match_indices(key).any(|(pos, _)| {
+        let after = input[pos + key.len()..].trim_start();
+        let after = after
+            .strip_prefix('"')
+            .or_else(|| after.strip_prefix('\''))
+            .unwrap_or(after)
+            .trim_start();
+        after.starts_with(':') || after.starts_with('=')
+    })
+}
+
+fn contains_openai_api_key(lower: &str) -> bool {
+    lower.match_indices("sk-").any(|(pos, _)| {
+        let has_token_boundary = pos == 0
+            || !lower[..pos]
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_ascii_alphanumeric());
+        let token_len = lower[pos..]
+            .chars()
+            .take_while(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+            .count();
+        has_token_boundary && token_len >= 8
+    })
 }
 
 pub fn redact_secrets(input: &str) -> String {
-    const ASSIGNMENT_SECRET_KEYS: [&str; 9] = [
+    const ASSIGNMENT_SECRET_KEYS: [&str; 10] = [
         "api_key",
         "api-key",
         "apikey",
         "authorization",
         "image_base64",
+        "image_url",
         "raw_response",
         "request_body",
         "token",
         "secret",
     ];
-    let lower = input.to_lowercase();
-    if lower.contains("authorization:") || lower.contains("bearer ") {
+    let lower = input.to_ascii_lowercase();
+    if lower.contains("authorization:")
+        || lower.contains("bearer ")
+        || lower.contains("data:image/")
+        || contains_openai_api_key(&lower)
+    {
         return "[redacted]".to_string();
     }
     if ASSIGNMENT_SECRET_KEYS

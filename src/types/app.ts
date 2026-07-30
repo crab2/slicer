@@ -249,6 +249,7 @@ export interface AnalysisBatchResultDto {
   failed_visual_modules: number;
   skipped_visual_modules: number;
   status: string;
+  error: AppErrorDto | null;
   updated_at: string;
 }
 

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Button } from "../../components/common/Button";
 import { ErrorMessage } from "../../components/common/ErrorMessage";
 import { StatusBadge } from "../../components/common/StatusBadge";
@@ -40,6 +40,12 @@ interface SettingsPageProps {
   onChooseWorkspace: () => void;
 }
 
+interface SettingsOperationError {
+  message: string;
+  details?: string | null;
+  correlationId?: string | null;
+}
+
 export function SettingsPage({
   workspaceStatus,
   isWorkspaceLoading,
@@ -48,11 +54,7 @@ export function SettingsPage({
   const [settings, setSettings] = useState<AppSettingsDto | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const [error, setError] = useState<{
-    message: string;
-    details?: string | null;
-    correlationId?: string | null;
-  } | null>(null);
+  const [error, setError] = useState<SettingsOperationError | null>(null);
   const [saved, setSaved] = useState(false);
   const [isFindingLibreOffice, setIsFindingLibreOffice] = useState(false);
   const [libreOfficeMessage, setLibreOfficeMessage] = useState<string | null>(null);
@@ -70,6 +72,15 @@ export function SettingsPage({
   const [openAIModels, setOpenAIModels] = useState<ModelInfoDto[]>([]);
   const [isFetchingOpenAIModels, setIsFetchingOpenAIModels] = useState(false);
   const [modelListMessage, setModelListMessage] = useState<string | null>(null);
+  const [modelProfileError, setModelProfileError] =
+    useState<SettingsOperationError | null>(null);
+  const modelListRequestSequence = useRef(0);
+
+  useEffect(() => {
+    return () => {
+      modelListRequestSequence.current += 1;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -117,6 +128,7 @@ export function SettingsPage({
   useEffect(() => {
     setOpenAIModels([]);
     setModelListMessage(null);
+    setModelProfileError(null);
   }, [modelProfileForm.provider, modelProfileForm.base_url, modelProfileForm.custom_endpoint]);
 
   function validateBeforeSave(current: AppSettingsDto): string | null {
@@ -151,8 +163,11 @@ export function SettingsPage({
   }
 
   function openCreateModelProfileDialog() {
+    modelListRequestSequence.current += 1;
+    setIsFetchingOpenAIModels(false);
     setOpenAIModels([]);
     setModelListMessage(null);
+    setModelProfileError(null);
     setModelProfileForm({
       ...EMPTY_MODEL_PROFILE_FORM,
       base_url: settings?.base_url ?? "",
@@ -162,8 +177,11 @@ export function SettingsPage({
   }
 
   function openEditModelProfileDialog(profile: ModelProfileDto) {
+    modelListRequestSequence.current += 1;
+    setIsFetchingOpenAIModels(false);
     setOpenAIModels([]);
     setModelListMessage(null);
+    setModelProfileError(null);
     setModelProfileForm({
       profile_id: profile.profile_id,
       label: profile.label,
@@ -179,22 +197,33 @@ export function SettingsPage({
   }
 
   function closeModelProfileDialog() {
+    modelListRequestSequence.current += 1;
+    setIsFetchingOpenAIModels(false);
     setIsModelProfileDialogOpen(false);
     setModelProfileForm(EMPTY_MODEL_PROFILE_FORM);
     setOpenAIModels([]);
     setModelListMessage(null);
+    setModelProfileError(null);
   }
 
   function updateModelProfileForm<K extends keyof ModelProfileFormState>(
     key: K,
     value: ModelProfileFormState[K],
   ) {
+    const invalidatesModelList =
+      key === "provider" ||
+      key === "base_url" ||
+      key === "custom_endpoint" ||
+      key === "api_key";
+    if (invalidatesModelList) {
+      modelListRequestSequence.current += 1;
+      setIsFetchingOpenAIModels(false);
+      setOpenAIModels([]);
+      setModelListMessage(null);
+    }
+    setModelProfileError(null);
     setModelProfileForm((prev) => {
       const next = { ...prev, [key]: value };
-      if (key === "provider" && value !== "openai") {
-        setOpenAIModels([]);
-        setModelListMessage(null);
-      }
       return next;
     });
   }
@@ -210,15 +239,18 @@ export function SettingsPage({
 
   async function handleSaveModelProfile() {
     if (!modelProfileForm.model_name.trim()) {
-      setError({ message: "请填写 Model Name。" });
+      setModelProfileError({ message: "请填写 Model Name。" });
       return;
     }
     if (!modelProfileForm.profile_id && !modelProfileForm.api_key.trim()) {
-      setError({ message: "新增模型配置时需要填写 API Key。" });
+      setModelProfileError({ message: "新增模型配置时需要填写 API Key。" });
       return;
     }
+    modelListRequestSequence.current += 1;
+    setIsFetchingOpenAIModels(false);
     setIsSavingModelProfile(true);
     setError(null);
+    setModelProfileError(null);
     try {
       const request: ModelProfileUpsertRequestDto = {
         profile_id: modelProfileForm.profile_id,
@@ -236,7 +268,7 @@ export function SettingsPage({
       setIsModelProfileDialogOpen(false);
       setModelProfileForm(EMPTY_MODEL_PROFILE_FORM);
     } catch (e) {
-      setError(extractError(e));
+      setModelProfileError(extractError(e));
     } finally {
       setIsSavingModelProfile(false);
     }
@@ -304,9 +336,12 @@ export function SettingsPage({
 
   async function handleFetchOpenAIModels() {
     if (!settings || modelProfileForm.provider !== "openai") return;
+    const requestSequence = modelListRequestSequence.current + 1;
+    modelListRequestSequence.current = requestSequence;
     setIsFetchingOpenAIModels(true);
     setError(null);
     setModelListMessage(null);
+    setModelProfileError(null);
     try {
       const result = await tauriClient.listOpenAIModels({
         ...settings,
@@ -315,6 +350,7 @@ export function SettingsPage({
         custom_endpoint: modelProfileForm.custom_endpoint,
         model_name: modelProfileForm.model_name,
       }, modelProfileForm.api_key.trim() || null, modelProfileForm.profile_id);
+      if (requestSequence !== modelListRequestSequence.current) return;
       setOpenAIModels(result.models);
       if (result.models.length === 0) {
         setModelListMessage("没有获取到可用模型，请检查 Base URL 或 API Key。");
@@ -323,13 +359,17 @@ export function SettingsPage({
         const currentModel = modelProfileForm.model_name.trim();
         const currentModelInList = result.models.some((model) => model.id === currentModel);
         if (!currentModel || !currentModelInList) {
-          updateModelProfileForm("model_name", result.models[0].id);
+          setModelProfileForm((prev) => ({ ...prev, model_name: result.models[0].id }));
         }
       }
     } catch (e) {
-      setError(extractError(e));
+      if (requestSequence === modelListRequestSequence.current) {
+        setModelProfileError(extractError(e));
+      }
     } finally {
-      setIsFetchingOpenAIModels(false);
+      if (requestSequence === modelListRequestSequence.current) {
+        setIsFetchingOpenAIModels(false);
+      }
     }
   }
 
@@ -600,6 +640,15 @@ export function SettingsPage({
                 ×
               </button>
             </div>
+
+            {modelProfileError ? (
+              <ErrorMessage
+                title="模型配置操作失败"
+                message={modelProfileError.message}
+                details={modelProfileError.details}
+                correlationId={modelProfileError.correlationId}
+              />
+            ) : null}
 
             <div className="model-profile-form setting-fields">
               <label>
