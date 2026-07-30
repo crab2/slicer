@@ -28,6 +28,9 @@ const mediaImport = mediaImportExists
 const mediaManagement = mediaManagementExists
   ? read("src/features/media-management/MediaManagementPage.tsx")
   : "";
+const mediaAssetList = mediaManagementExists
+  ? read("src/features/media-management/components/MediaAssetList.tsx")
+  : "";
 
 expect(
   "导航不再暴露旧文案",
@@ -53,12 +56,11 @@ expect(
   "navigation context must include route and restore fields",
 );
 expect(
-  "AppShell 注册媒体管理并传递 context",
+  "AppShell 注册精简后的媒体管理",
   appShell.includes("MediaManagementPage") &&
-    appShell.includes("navigationContext") &&
-    appShell.includes("onNavigateWithContext") &&
-    appShell.includes("onReturnToSource"),
-  "AppShell must own cross-tab context and register media management",
+    appShell.includes("onChooseWorkspace") &&
+    !appShell.includes("onNavigateWithContext"),
+  "AppShell must register media management without the removed reanalysis route",
 );
 expect(
   "工作台不再执行业务命令",
@@ -100,19 +102,21 @@ expect(
   "tauriClient should expose openMediaImportDialog from fileValidation extensions",
 );
 expect(
-  "媒体管理 feature 承载管理和重分析路由",
+  "媒体管理仅保留查看、失败重试、删除和筛选",
   mediaManagementExists &&
-    mediaManagement.includes("媒体管理") &&
+    mediaManagement.includes("DocumentFormatViewer") &&
     mediaManagement.includes("listDocuments") &&
     mediaManagement.includes("listWorkbenchPages") &&
+    mediaManagement.includes("retryImport") &&
     mediaManagement.includes("deleteDocument") &&
-    mediaManagement.includes("revealDocumentInFolder") &&
-    mediaManagement.includes("onNavigateWithContext") &&
-    mediaManagement.includes("selected_ids") &&
-    !mediaManagement.includes("reanalyzeDocument(") &&
-    !mediaManagement.includes("reanalyzeFailedPages(") &&
-    !mediaManagement.includes("analyzePage("),
-  "MediaManagementPage should manage assets but route reanalysis through context only",
+    mediaAssetList.includes("查看文档") &&
+    !mediaManagement.includes("revealDocumentInFolder") &&
+    !mediaManagement.includes("onNavigateWithContext") &&
+    !mediaAssetList.includes('type="checkbox"') &&
+    !mediaAssetList.includes("重分析") &&
+    !mediaAssetList.includes("源文件") &&
+    !mediaAssetList.includes("查看页面"),
+  "Media management must expose the shared viewer without removed bulk, source, page, or reanalysis actions",
 );
 expect(
   "模型分析接收并展示重分析上下文",

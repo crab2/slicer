@@ -1,5 +1,6 @@
 pub mod analysis;
 pub mod document;
+pub mod document_viewer;
 pub mod index;
 pub mod job;
 pub mod page;

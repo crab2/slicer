@@ -59,7 +59,13 @@ impl PdfStructureRepository {
                 sqlx::query(
                     "DELETE FROM document_artifacts
                      WHERE document_id = ?1
-                       AND kind IN ('pdf_structure_json', 'pdf_structure_image')",
+                       AND kind IN (
+                         'pdf_structure_json',
+                         'pdf_structure_html',
+                         'pdf_structure_markdown',
+                         'pdf_structure_annotated_pdf',
+                         'pdf_structure_image'
+                       )",
                 )
                 .bind(&run.document_id)
                 .execute(&mut *conn)

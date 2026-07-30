@@ -15,6 +15,9 @@ import type {
   CoreStatusCatalogDto,
   CreateJobRequestDto,
   DocumentDto,
+  DocumentViewerContentDto,
+  DocumentViewerFormat,
+  DocumentViewerManifestDto,
   ImportResultDto,
   JobDto,
   MediaExportResultDto,
@@ -281,6 +284,18 @@ export const tauriClient = {
   importMultiplePdf: async (filePaths: string[]): Promise<ImportResultDto[]> =>
     tauriClient.importMultipleDocuments(filePaths),
   listDocuments: () => callTauriCommand<DocumentDto[]>("list_documents"),
+  getDocumentViewerManifest: (documentId: string) =>
+    callTauriCommand<DocumentViewerManifestDto>("get_document_viewer_manifest", {
+      documentId,
+    }),
+  getDocumentViewerContent: (
+    documentId: string,
+    format: DocumentViewerFormat,
+  ) =>
+    callTauriCommand<DocumentViewerContentDto>("get_document_viewer_content", {
+      documentId,
+      format,
+    }),
   retryImport: (documentId: string) =>
     callTauriCommand<DocumentDto>("retry_import", { documentId }),
   deleteDocument: (documentId: string) =>

@@ -32,6 +32,8 @@ pub const OPENDATALOADER_JAR_SHA256: &str =
     "516ce47832a6726e87cb17db77c20174ca8cabbe9a6b56db1418babc7c9ddcba";
 const MAX_PROCESS_OUTPUT_BYTES: usize = 64 * 1024;
 const MAX_JSON_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_TEXT_VIEW_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
+const MAX_ANNOTATED_PDF_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_CONTENT_BLOCKS: usize = 100_000;
 const MAX_BLOCK_TREE_DEPTH: usize = 32;
 const MAX_BLOCK_RAW_JSON_TOTAL_BYTES: usize = 128 * 1024 * 1024;
@@ -74,6 +76,9 @@ pub struct PdfStructureExtraction {
     pub blocks: Vec<PdfContentBlockDto>,
     pub staging_dir: PathBuf,
     pub raw_json_path: PathBuf,
+    pub html_path: PathBuf,
+    pub markdown_path: PathBuf,
+    pub annotated_pdf_path: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -228,7 +233,7 @@ impl OpenDataLoaderPdfProvider {
             OsString::from("-jar"),
             self.jar_path.as_os_str().to_owned(),
             OsString::from("--format"),
-            OsString::from("json"),
+            OsString::from("json,markdown,html,pdf"),
             OsString::from("--image-output"),
             OsString::from("external"),
             OsString::from("--image-format"),
@@ -255,10 +260,10 @@ impl OpenDataLoaderPdfProvider {
         )?;
         validate_image_output_limits(&image_dir, IMAGE_OUTPUT_LIMITS)?;
 
-        let expected_name = canonical_pdf_path
+        let expected_stem = canonical_pdf_path
             .file_stem()
             .and_then(OsStr::to_str)
-            .map(|stem| format!("{stem}.json"))
+            .map(str::to_owned)
             .ok_or_else(|| {
                 AppError::new(
                     "opendataloader_output_name_invalid",
@@ -267,7 +272,7 @@ impl OpenDataLoaderPdfProvider {
                     false,
                 )
             })?;
-        let raw_json_path = staging_dir.join(expected_name);
+        let raw_json_path = staging_dir.join(format!("{expected_stem}.json"));
         let raw_json_path = canonical_existing_path(&raw_json_path, "opendataloader_json_missing")?;
         let staging_canonical =
             canonical_existing_path(staging_dir, "pdf_structure_staging_invalid")?;
@@ -292,6 +297,27 @@ impl OpenDataLoaderPdfProvider {
             )
             .with_details(format!("bytes={}", metadata.len())));
         }
+        let html_path = validate_output_artifact(
+            &staging_canonical,
+            &format!("{expected_stem}.html"),
+            "opendataloader_html_missing",
+            "opendataloader_html_too_large",
+            MAX_TEXT_VIEW_ARTIFACT_BYTES,
+        )?;
+        let markdown_path = validate_output_artifact(
+            &staging_canonical,
+            &format!("{expected_stem}.md"),
+            "opendataloader_markdown_missing",
+            "opendataloader_markdown_too_large",
+            MAX_TEXT_VIEW_ARTIFACT_BYTES,
+        )?;
+        let annotated_pdf_path = validate_output_artifact(
+            &staging_canonical,
+            &format!("{expected_stem}_annotated.pdf"),
+            "opendataloader_annotated_pdf_missing",
+            "opendataloader_annotated_pdf_too_large",
+            MAX_ANNOTATED_PDF_BYTES,
+        )?;
         let raw_json = fs::read(&raw_json_path).map_err(|err| {
             AppError::io(
                 "pdf_structure_validate",
@@ -333,6 +359,9 @@ impl OpenDataLoaderPdfProvider {
             blocks,
             staging_dir: staging_canonical,
             raw_json_path,
+            html_path,
+            markdown_path,
+            annotated_pdf_path,
         })
     }
 }
@@ -831,6 +860,40 @@ fn validate_relative_output_path(output_root: &Path, value: &str) -> AppResult<S
         )
     })?;
     Ok(canonical_relative.to_string_lossy().replace('\\', "/"))
+}
+
+fn validate_output_artifact(
+    output_dir: &Path,
+    file_name: &str,
+    missing_code: &str,
+    too_large_code: &str,
+    max_bytes: u64,
+) -> AppResult<PathBuf> {
+    let path = canonical_existing_path(&output_dir.join(file_name), missing_code)?;
+    ensure_descendant(output_dir, &path, "opendataloader_output_path_invalid")?;
+    let metadata = fs::metadata(&path).map_err(|err| {
+        AppError::io("pdf_structure_validate", missing_code, err)
+            .with_details(path.display().to_string())
+    })?;
+    if !metadata.is_file() {
+        return Err(AppError::new(
+            missing_code,
+            "OpenDataLoader PDF 输出文件缺失。",
+            "pdf_structure_validate",
+            false,
+        )
+        .with_details(path.display().to_string()));
+    }
+    if metadata.len() > max_bytes {
+        return Err(AppError::new(
+            too_large_code,
+            "OpenDataLoader PDF 输出超过安全大小限制。",
+            "pdf_structure_validate",
+            false,
+        )
+        .with_details(format!("bytes={}; max_bytes={max_bytes}", metadata.len())));
+    }
+    Ok(path)
 }
 
 fn canonical_existing_path(path: &Path, code: &str) -> AppResult<PathBuf> {

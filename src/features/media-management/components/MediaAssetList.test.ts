@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { DocumentDto, PageWorkbenchDto } from "../../../types/app";
-import {
-  filterDocuments,
-  getDocumentReanalysisValidation,
-} from "./MediaAssetList";
+import { countDocumentAnalysisFailures, filterDocuments } from "./MediaAssetList";
 
 function document(): DocumentDto {
   return {
@@ -24,9 +21,7 @@ function document(): DocumentDto {
   };
 }
 
-function structuredPage(
-  overrides: Partial<PageWorkbenchDto> = {},
-): PageWorkbenchDto {
+function structuredPage(overrides: Partial<PageWorkbenchDto> = {}): PageWorkbenchDto {
   return {
     page_id: "structured-page",
     document_id: "structured-document",
@@ -46,18 +41,17 @@ function structuredPage(
   };
 }
 
-describe("structured media management", () => {
-  it("allows document reanalysis without a whole-page image", () => {
-    expect(
-      getDocumentReanalysisValidation(document(), [structuredPage()]),
-    ).toEqual({ disabledReason: null });
+describe("media management filters", () => {
+  it("includes visual modules in pending and failed filters", () => {
+    const item = document();
+    const pages = { [item.document_id]: [structuredPage()] };
+    expect(filterDocuments([item], pages, "", "needs_analysis")).toEqual([item]);
+    expect(filterDocuments([item], pages, "", "has_failed_pages")).toEqual([item]);
   });
 
-  it("includes visual modules in pending and failed filters", () => {
-    const doc = document();
-    const pages = { [doc.document_id]: [structuredPage()] };
-
-    expect(filterDocuments([doc], pages, "", "needs_analysis")).toEqual([doc]);
-    expect(filterDocuments([doc], pages, "", "has_failed_pages")).toEqual([doc]);
+  it("does not double-count failed pages reported by both document and page rows", () => {
+    const item = { ...document(), analysis_failed_pages: 1 };
+    const pages = [structuredPage({ status: "failed", failed_visual_module_count: 2 })];
+    expect(countDocumentAnalysisFailures(item, pages)).toBe(3);
   });
 });

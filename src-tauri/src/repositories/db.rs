@@ -46,6 +46,11 @@ const MIGRATIONS: &[Migration] = &[
         name: "previewless_pdf_pages",
         sql: include_str!("../../migrations/0007_previewless_pdf_pages.sql"),
     },
+    Migration {
+        version: 8,
+        name: "document_view_artifacts",
+        sql: include_str!("../../migrations/0008_document_view_artifacts.sql"),
+    },
 ];
 
 pub fn block_on_db<T>(future: impl Future<Output = AppResult<T>>) -> AppResult<T> {
@@ -453,6 +458,135 @@ mod tests {
             Ok(())
         })
         .expect("v7 assertions");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn upgrades_v7_artifacts_to_viewer_formats_without_losing_rows_or_cascades() {
+        let root =
+            std::env::temp_dir().join(format!("slicer-db-v7-upgrade-{}", uuid::Uuid::new_v4()));
+        let db_path = root.join("app.db");
+        fs::create_dir_all(&root).expect("temp root");
+
+        block_on_db(async {
+            let mut connection = connect_workspace_db(db_path.clone()).await?;
+            connection
+                .execute(
+                    "CREATE TABLE schema_migrations (
+                       version INTEGER PRIMARY KEY,
+                       name TEXT NOT NULL,
+                       applied_at TEXT NOT NULL
+                     )",
+                )
+                .await
+                .map_err(|err| super::database_error("test", "migration_seed_failed", err))?;
+            for migration in MIGRATIONS.iter().filter(|migration| migration.version <= 7) {
+                execute_sql_script(&mut connection, migration.sql).await?;
+                sqlx::query(
+                    "INSERT INTO schema_migrations (version, name, applied_at)
+                     VALUES (?1, ?2, '2026-01-01T00:00:00Z')",
+                )
+                .bind(migration.version)
+                .bind(migration.name)
+                .execute(&mut connection)
+                .await
+                .map_err(|err| {
+                    super::database_error("test", "migration_version_seed_failed", err)
+                })?;
+            }
+            execute_sql_script(
+                &mut connection,
+                "INSERT INTO documents
+                   (document_id, original_filename, file_type, file_hash, original_path,
+                    page_count, status, created_at, updated_at)
+                 VALUES ('doc-v7', 'legacy.pdf', 'pdf', 'hash', 'originals/legacy.pdf',
+                         1, 'ready', '2026-01-01', '2026-01-01');
+                 INSERT INTO document_artifacts
+                   (artifact_id, document_id, kind, relative_path, content_hash,
+                    created_at, updated_at)
+                 VALUES ('artifact-pdf', 'doc-v7', 'canonical_pdf', 'pdfs/legacy.pdf',
+                         'pdf-hash', '2026-01-01', '2026-01-01');
+                 INSERT INTO document_artifacts
+                   (artifact_id, document_id, kind, relative_path, content_hash,
+                    created_at, updated_at)
+                 VALUES ('artifact-json', 'doc-v7', 'pdf_structure_json',
+                         'structure/legacy.json', 'json-hash', '2026-01-01', '2026-01-01');
+                 INSERT INTO document_artifacts
+                   (artifact_id, document_id, kind, relative_path, content_hash,
+                    created_at, updated_at)
+                 VALUES ('artifact-image', 'doc-v7', 'pdf_structure_image',
+                         'structure/images/legacy.png', 'image-hash',
+                         '2026-01-01', '2026-01-01')",
+            )
+            .await?;
+            Ok(())
+        })
+        .expect("seed v7 database");
+
+        block_on_db(run_migrations(db_path.clone())).expect("upgrade to v8");
+        block_on_db(run_migrations(db_path.clone())).expect("v8 rerun is idempotent");
+
+        block_on_db(async {
+            let mut connection = connect_workspace_db(db_path).await?;
+            let legacy_rows = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM document_artifacts WHERE document_id = 'doc-v7'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|err| super::database_error("test", "artifact_count_failed", err))?;
+            assert_eq!(legacy_rows, 3);
+            let pdf_hash = sqlx::query_scalar::<_, String>(
+                "SELECT content_hash FROM document_artifacts WHERE artifact_id = 'artifact-pdf'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|err| super::database_error("test", "artifact_hash_failed", err))?;
+            assert_eq!(pdf_hash, "pdf-hash");
+
+            sqlx::query(
+                "INSERT INTO document_artifacts
+                   (artifact_id, document_id, kind, relative_path, content_hash,
+                    created_at, updated_at)
+                 VALUES ('artifact-md', 'doc-v7', 'pdf_structure_markdown',
+                         'structure/legacy.md', 'md-hash', '2026-01-02', '2026-01-02')",
+            )
+            .execute(&mut connection)
+            .await
+            .map_err(|err| super::database_error("test", "new_artifact_insert_failed", err))?;
+            let duplicate = sqlx::query(
+                "INSERT INTO document_artifacts
+                   (artifact_id, document_id, kind, relative_path, content_hash,
+                    created_at, updated_at)
+                 VALUES ('artifact-pdf-2', 'doc-v7', 'canonical_pdf', 'pdfs/other.pdf',
+                         'other-hash', '2026-01-02', '2026-01-02')",
+            )
+            .execute(&mut connection)
+            .await;
+            assert!(
+                duplicate.is_err(),
+                "singleton index must reject a second canonical PDF"
+            );
+
+            sqlx::query("DELETE FROM documents WHERE document_id = 'doc-v7'")
+                .execute(&mut connection)
+                .await
+                .map_err(|err| super::database_error("test", "document_delete_failed", err))?;
+            let remaining = sqlx::query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM document_artifacts WHERE document_id = 'doc-v7'",
+            )
+            .fetch_one(&mut connection)
+            .await
+            .map_err(|err| super::database_error("test", "cascade_count_failed", err))?;
+            assert_eq!(remaining, 0);
+            let violations = sqlx::query("PRAGMA foreign_key_check")
+                .fetch_all(&mut connection)
+                .await
+                .map_err(|err| super::database_error("test", "foreign_key_check_failed", err))?;
+            assert!(violations.is_empty(), "foreign key violations were found");
+            Ok(())
+        })
+        .expect("v8 assertions");
 
         let _ = fs::remove_dir_all(root);
     }

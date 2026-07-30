@@ -1291,6 +1291,21 @@ impl ImportService {
             })?
             .to_owned();
         let final_raw_json = final_dir.join(raw_json_name);
+        let final_html = committed_output_path(
+            &final_dir,
+            &extraction.html_path,
+            "pdf_structure_html_name_missing",
+        )?;
+        let final_markdown = committed_output_path(
+            &final_dir,
+            &extraction.markdown_path,
+            "pdf_structure_markdown_name_missing",
+        )?;
+        let final_annotated_pdf = committed_output_path(
+            &final_dir,
+            &extraction.annotated_pdf_path,
+            "pdf_structure_annotated_pdf_name_missing",
+        )?;
         let raw_relative = Self::relative_workspace_path(layout.root(), &final_raw_json)?;
         let structure_relative = Self::relative_workspace_path(layout.root(), &final_dir)?;
         let mut run = extraction.run;
@@ -1316,6 +1331,22 @@ impl ImportService {
             parser_version: Some(PDF_STRUCTURE_PARSER_VERSION.to_string()),
             parser_options_json: Some(PDF_STRUCTURE_OPTIONS_JSON.to_string()),
         }];
+        for (kind, path) in [
+            ("pdf_structure_html", &final_html),
+            ("pdf_structure_markdown", &final_markdown),
+            ("pdf_structure_annotated_pdf", &final_annotated_pdf),
+        ] {
+            artifacts.push(DocumentArtifactInput {
+                artifact_id: Uuid::new_v4().to_string(),
+                document_id: document_id.to_string(),
+                kind: kind.to_string(),
+                relative_path: Self::relative_workspace_path(layout.root(), path)?,
+                content_hash: compute_file_hash(path)?,
+                parser_name: Some(PDF_STRUCTURE_PARSER_NAME.to_string()),
+                parser_version: Some(PDF_STRUCTURE_PARSER_VERSION.to_string()),
+                parser_options_json: Some(PDF_STRUCTURE_OPTIONS_JSON.to_string()),
+            });
+        }
         let image_dir = final_dir.join("images");
         if image_dir.is_dir() {
             for path in Self::collect_managed_files(&image_dir)? {
@@ -1612,6 +1643,40 @@ impl ImportService {
         })?;
         Ok(png_bytes)
     }
+}
+
+fn committed_output_path(
+    final_dir: &Path,
+    staged_path: &Path,
+    name_missing_code: &str,
+) -> AppResult<PathBuf> {
+    let file_name = staged_path.file_name().ok_or_else(|| {
+        AppError::new(
+            name_missing_code,
+            "PDF 结构化制品文件名缺失。",
+            "pdf_structure_persist",
+            false,
+        )
+    })?;
+    let path = final_dir.join(file_name);
+    let metadata = fs::symlink_metadata(&path).map_err(|err| {
+        AppError::io(
+            "pdf_structure_persist",
+            "pdf_structure_committed_output_missing",
+            err,
+        )
+        .with_details(path.display().to_string())
+    })?;
+    if is_link_or_reparse_point(&metadata) || !metadata.file_type().is_file() {
+        return Err(AppError::new(
+            "pdf_structure_committed_output_invalid",
+            "PDF 结构化制品不是普通文件。",
+            "pdf_structure_persist",
+            false,
+        )
+        .with_details(path.display().to_string()));
+    }
+    Ok(path)
 }
 
 #[cfg(test)]

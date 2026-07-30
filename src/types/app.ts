@@ -155,6 +155,40 @@ export interface DocumentDto {
   updated_at: string;
 }
 
+export type DocumentViewerFormat =
+  | "pdf"
+  | "annot"
+  | "preview"
+  | "html"
+  | "md"
+  | "json";
+
+export interface DocumentViewerFormatAvailabilityDto {
+  format: DocumentViewerFormat;
+  available: boolean;
+}
+
+export interface DocumentViewerManifestDto {
+  document_id: string;
+  original_filename: string;
+  page_count: number | null;
+  formats: DocumentViewerFormatAvailabilityDto[];
+}
+
+export interface DocumentViewerAssetDto {
+  source: string;
+  mime_type: string;
+  data_url: string;
+}
+
+export interface DocumentViewerContentDto {
+  format: DocumentViewerFormat;
+  mime_type: string;
+  encoding: "utf8" | "base64";
+  content: string;
+  assets: DocumentViewerAssetDto[];
+}
+
 export interface PageRecordDto {
   page_id: string;
   document_id: string;

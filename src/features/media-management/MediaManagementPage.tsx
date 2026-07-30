@@ -3,39 +3,35 @@ import { Button } from "../../components/common/Button";
 import { EmptyState } from "../../components/common/EmptyState";
 import { ErrorMessage } from "../../components/common/ErrorMessage";
 import { StatusBadge } from "../../components/common/StatusBadge";
+import { DocumentFormatViewer } from "../../components/document-viewer/DocumentFormatViewer";
 import { tauriClient } from "../../lib/tauriClient";
 import type { DocumentDto, JobDto, PageWorkbenchDto, WorkspaceStatusDto } from "../../types/app";
-import type { NavigationContext, ReanalysisNavigationContext, ViewId } from "../../app/navigation";
 import {
-  getDocumentReanalysisValidation,
+  countDocumentAnalysisFailures,
   MediaAssetList,
-  type MediaAssetSelection,
   type MediaStatusFilter,
 } from "./components/MediaAssetList";
+
+const PAGE_REFRESH_CONCURRENCY = 16;
 
 interface MediaManagementPageProps {
   workspaceStatus: WorkspaceStatusDto;
   isWorkspaceLoading: boolean;
   isActive: boolean;
-  navigationContext: NavigationContext | null;
   onChooseWorkspace: () => void;
-  onNavigateWithContext: (view: ViewId, context: NavigationContext) => void;
-  onClearNavigationContext: () => void;
 }
 
 export function MediaManagementPage({
   workspaceStatus,
   isWorkspaceLoading,
   isActive,
-  navigationContext,
   onChooseWorkspace,
-  onNavigateWithContext,
-  onClearNavigationContext,
 }: MediaManagementPageProps) {
   const workspaceReady = workspaceStatus.status === "ready";
   const workspaceKey = workspaceStatus.workspace_path ?? "current";
-  const docsGenRef = useRef(0);
-  const jobsGenRef = useRef(0);
+  const docsGeneration = useRef(0);
+  const jobsGeneration = useRef(0);
+  const viewerRef = useRef<HTMLDivElement>(null);
   const [jobs, setJobs] = useState<JobDto[]>([]);
   const [documents, setDocuments] = useState<DocumentDto[]>([]);
   const [pagesByDocument, setPagesByDocument] = useState<Record<string, PageWorkbenchDto[]>>({});
@@ -44,18 +40,17 @@ export function MediaManagementPage({
   const [error, setError] = useState<{ message: string; correlationId?: string | null } | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState<MediaStatusFilter>("all");
-  const [selectedDocumentIds, setSelectedDocumentIds] = useState<string[]>([]);
+  const [selectedDocumentId, setSelectedDocumentId] = useState<string | null>(null);
   const [deletingDocumentId, setDeletingDocumentId] = useState<string | null>(null);
-  const [returnNotice, setReturnNotice] = useState<string | null>(null);
+  const [viewerRefreshKey, setViewerRefreshKey] = useState(0);
 
-  const validSelectedDocumentIds = useMemo(() => {
-    const documentIds = new Set(documents.map((doc) => doc.document_id));
-    return selectedDocumentIds.filter((id) => documentIds.has(id));
-  }, [documents, selectedDocumentIds]);
-
-  const managementStats = useMemo(
-    () => computeMediaStats(documents, pagesByDocument, jobs),
-    [documents, pagesByDocument, jobs],
+  const selectedDocument = useMemo(
+    () => documents.find((document) => document.document_id === selectedDocumentId) ?? null,
+    [documents, selectedDocumentId],
+  );
+  const stats = useMemo(
+    () => computeMediaStats(documents, pagesByDocument),
+    [documents, pagesByDocument],
   );
 
   async function refreshJobs() {
@@ -63,21 +58,15 @@ export function MediaManagementPage({
       setJobs([]);
       return;
     }
-    const gen = ++jobsGenRef.current;
+    const generation = ++jobsGeneration.current;
     setIsJobsLoading(true);
     try {
       const result = await tauriClient.listJobs();
-      if (gen === jobsGenRef.current) {
-        setJobs(result);
-      }
-    } catch (err) {
-      if (gen === jobsGenRef.current) {
-        setError(extractError(err));
-      }
+      if (generation === jobsGeneration.current) setJobs(result);
+    } catch (nextError) {
+      if (generation === jobsGeneration.current) setError(extractError(nextError));
     } finally {
-      if (gen === jobsGenRef.current) {
-        setIsJobsLoading(false);
-      }
+      if (generation === jobsGeneration.current) setIsJobsLoading(false);
     }
   }
 
@@ -87,37 +76,35 @@ export function MediaManagementPage({
       setPagesByDocument({});
       return;
     }
-    const gen = ++docsGenRef.current;
+    const generation = ++docsGeneration.current;
     setIsDocsLoading(true);
     setError(null);
     try {
-      const docs = await tauriClient.listDocuments();
-      if (gen !== docsGenRef.current) {
-        return;
+      const nextDocuments = await tauriClient.listDocuments();
+      const pageEntries: Array<readonly [string, PageWorkbenchDto[]]> = [];
+      for (let offset = 0; offset < nextDocuments.length; offset += PAGE_REFRESH_CONCURRENCY) {
+        const batch = await Promise.all(
+          nextDocuments.slice(offset, offset + PAGE_REFRESH_CONCURRENCY).map(async (document) => {
+          try {
+            return [document.document_id, await tauriClient.listWorkbenchPages(document.document_id)] as const;
+          } catch {
+            return [document.document_id, [] as PageWorkbenchDto[]] as const;
+          }
+          }),
+        );
+        if (generation !== docsGeneration.current) return;
+        pageEntries.push(...batch);
       }
-      const pagesMap: Record<string, PageWorkbenchDto[]> = {};
-      for (const doc of docs) {
-        try {
-          pagesMap[doc.document_id] = await tauriClient.listWorkbenchPages(doc.document_id);
-        } catch {
-          pagesMap[doc.document_id] = [];
-        }
-        if (gen !== docsGenRef.current) {
-          return;
-        }
-      }
-      setDocuments(docs);
-      setPagesByDocument(pagesMap);
-    } catch (err) {
-      if (gen === docsGenRef.current) {
+      setDocuments(nextDocuments);
+      setPagesByDocument(Object.fromEntries(pageEntries));
+    } catch (nextError) {
+      if (generation === docsGeneration.current) {
         setDocuments([]);
         setPagesByDocument({});
-        setError(extractError(err));
+        setError(extractError(nextError));
       }
     } finally {
-      if (gen === docsGenRef.current) {
-        setIsDocsLoading(false);
-      }
+      if (generation === docsGeneration.current) setIsDocsLoading(false);
     }
   }
 
@@ -129,32 +116,11 @@ export function MediaManagementPage({
     setError(null);
     try {
       await tauriClient.retryImport(documentId);
+      setViewerRefreshKey((current) => current + 1);
+    } catch (nextError) {
+      setError(extractError(nextError));
+    } finally {
       await refreshAll();
-    } catch (err) {
-      setError(extractError(err));
-      await refreshAll();
-    }
-  }
-
-  async function handleOpenSourceFile(path: string) {
-    try {
-      await tauriClient.revealDocumentInFolder(path);
-    } catch (err) {
-      setError(extractError(err));
-    }
-  }
-
-  async function handleOpenDocumentImage(page: PageWorkbenchDto) {
-    const imagePath = resolveWorkspacePath(page.image_path, workspaceStatus.workspace_path);
-    if (!imagePath) {
-      setError({ message: "此页面没有可用的整页预览。" });
-      return;
-    }
-
-    try {
-      await tauriClient.revealDocumentInFolder(imagePath);
-    } catch (err) {
-      setError(extractError(err));
     }
   }
 
@@ -163,101 +129,40 @@ export function MediaManagementPage({
     setError(null);
     try {
       await tauriClient.deleteDocument(documentId);
-      setSelectedDocumentIds((ids) => ids.filter((id) => id !== documentId));
-      await refreshAll();
-    } catch (err) {
-      setError(extractError(err));
-      await refreshAll();
+      setSelectedDocumentId((current) => (current === documentId ? null : current));
+    } catch (nextError) {
+      setError(extractError(nextError));
     } finally {
       setDeletingDocumentId(null);
+      await refreshAll();
     }
   }
 
-  function handleReanalysisRequest(selection: MediaAssetSelection) {
-    if (selection.disabledReason) {
-      setError({ message: selection.disabledReason });
-      return;
-    }
-
-    const context: ReanalysisNavigationContext = {
-      action: "reanalyze",
-      retry_failed_only: Boolean(selection.retryFailedOnly),
-      source_tab: "mediaManagement",
-      return_to: "mediaManagement",
-      selected_kind:
-        selection.kind === "page"
-          ? selection.ids.length > 1
-            ? "page_batch"
-            : "page"
-          : selection.ids.length > 1
-            ? "document_batch"
-            : "document",
-      selected_ids: selection.ids,
-      filter: statusFilter,
-      query,
-      scroll_anchor: selection.ids[0] ? `media-${selection.ids[0]}` : null,
-      selection_count: selection.ids.length,
-    };
-    onNavigateWithContext("analysis", context);
-  }
-
-  function handleBatchReanalysis() {
-    const ids = validSelectedDocumentIds.filter((id) => {
-      const doc = documents.find((item) => item.document_id === id);
-      if (!doc) {
-        return false;
-      }
-      const pages = pagesByDocument[id] ?? [];
-      return !getDocumentReanalysisValidation(doc, pages).disabledReason;
-    });
-    if (ids.length === 0) {
-      setError({ message: "当前选择中没有可重分析的媒体。" });
-      return;
-    }
-    handleReanalysisRequest({
-      kind: "document",
-      ids,
-      label: `${ids.length} 个媒体`,
+  function handleViewDocument(document: DocumentDto) {
+    setSelectedDocumentId(document.document_id);
+    window.requestAnimationFrame(() => {
+      viewerRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     });
   }
 
   useEffect(() => {
-    ++docsGenRef.current;
-    ++jobsGenRef.current;
+    ++docsGeneration.current;
+    ++jobsGeneration.current;
     setError(null);
-    setSelectedDocumentIds([]);
+    setSelectedDocumentId(null);
     setDeletingDocumentId(null);
     if (!workspaceReady) {
-      setJobs([]);
       setDocuments([]);
       setPagesByDocument({});
+      setJobs([]);
       return;
     }
     void refreshAll();
   }, [workspaceReady, workspaceKey]);
 
   useEffect(() => {
-    if (!workspaceReady || !isActive) {
-      return;
-    }
-    void refreshAll();
+    if (workspaceReady && isActive) void refreshAll();
   }, [workspaceReady, isActive]);
-
-  useEffect(() => {
-    if (!isActive || !navigationContext || navigationContext.return_to !== "mediaManagement") {
-      return;
-    }
-    setQuery(navigationContext.query);
-    setStatusFilter((navigationContext.filter as MediaStatusFilter) || "all");
-    setSelectedDocumentIds(
-      navigationContext.selected_kind.includes("document")
-        ? navigationContext.selected_ids
-        : [],
-    );
-    setReturnNotice("已返回媒体管理，并重新从后端刷新当前媒体状态。");
-    void refreshAll();
-    onClearNavigationContext();
-  }, [isActive, navigationContext, onClearNavigationContext]);
 
   if (!workspaceReady) {
     return (
@@ -267,17 +172,10 @@ export function MediaManagementPage({
             <div>
               <p className="eyebrow">媒体管理</p>
               <h2>选择工作区后查看媒体资产</h2>
-              <p className="muted-copy">
-                媒体列表、页面缩略图和状态都来自本地 service 与 SQLite 账本。
-              </p>
             </div>
             <StatusBadge tone="warning">尚未选择工作区</StatusBadge>
           </div>
-          <Button
-            variant="primary"
-            onClick={onChooseWorkspace}
-            disabled={isWorkspaceLoading}
-          >
+          <Button variant="primary" onClick={onChooseWorkspace} disabled={isWorkspaceLoading}>
             {isWorkspaceLoading ? "检查中..." : "选择工作区"}
           </Button>
         </section>
@@ -291,78 +189,52 @@ export function MediaManagementPage({
         <div className="panel-header">
           <div>
             <p className="eyebrow">媒体管理</p>
-            <h2>媒体资产、页面与重分析选择</h2>
-            <p className="muted-copy">
-              管理操作通过 typed client 调用后端 service；重分析只构建路由上下文并交给模型分析页执行。
-            </p>
+            <h2>媒体资产</h2>
           </div>
           <StatusBadge tone={isDocsLoading || isJobsLoading ? "warning" : "success"}>
-            {isDocsLoading || isJobsLoading ? "刷新中" : "账本数据"}
+            {isDocsLoading || isJobsLoading ? "刷新中" : "已同步"}
           </StatusBadge>
         </div>
-
-        <div className="workbench-summary-grid">
-          <Metric label="媒体" value={managementStats.documentCount} helper="来自账本" />
-          <Metric label="页面" value={managementStats.totalPages} helper={`${managementStats.generatedPages} 页有图片`} />
-          <Metric label="待分析" value={managementStats.pendingPages} helper="可进入模型分析" />
-          <Metric
-            label="失败"
-            value={managementStats.failureCount}
-            helper="导入或页面失败"
-            tone={managementStats.failureCount > 0 ? "danger" : "neutral"}
-          />
-          <Metric label="选中" value={validSelectedDocumentIds.length} helper="批量重分析上下文" />
+        <div className="workbench-summary-grid media-management-metrics">
+          <Metric label="媒体" value={stats.documentCount} helper="本地账本" />
+          <Metric label="页面" value={stats.totalPages} helper="已导入" />
+          <Metric label="已分析" value={stats.analyzedPages} helper="页面" />
+          <Metric label="失败" value={stats.failureCount} helper="导入或分析" tone={stats.failureCount > 0 ? "danger" : "neutral"} />
         </div>
-
         <div className="media-management-actions">
-          <Button onClick={() => void refreshAll()} disabled={isDocsLoading || isJobsLoading}>
-            刷新
-          </Button>
-          <Button
-            variant="primary"
-            onClick={handleBatchReanalysis}
-            disabled={validSelectedDocumentIds.length === 0}
-          >
-            重分析选中项
-          </Button>
+          <Button onClick={() => void refreshAll()} disabled={isDocsLoading || isJobsLoading}>刷新</Button>
         </div>
-
-        {returnNotice ? <p className="muted-copy">{returnNotice}</p> : null}
-        {error ? (
-          <ErrorMessage
-            title="媒体管理"
-            message={error.message}
-            correlationId={error.correlationId}
-          />
-        ) : null}
+        {error ? <ErrorMessage title="媒体管理" message={error.message} correlationId={error.correlationId} /> : null}
       </section>
 
       {documents.length === 0 && !isDocsLoading ? (
-        <EmptyState
-          title="还没有媒体资产"
-          description="请先在媒体导入中提交图片或文档。"
-        />
+        <EmptyState title="还没有媒体资产" description="请先在媒体导入中添加文档。" />
       ) : null}
 
-      <MediaAssetList
-        documents={documents}
-        pagesByDocument={pagesByDocument}
-        jobs={jobs}
-        isLoading={isDocsLoading}
-        workspacePath={workspaceStatus.workspace_path}
-        query={query}
-        statusFilter={statusFilter}
-        selectedDocumentIds={validSelectedDocumentIds}
-        onQueryChange={setQuery}
-        onStatusFilterChange={setStatusFilter}
-        onSelectionChange={setSelectedDocumentIds}
-        onRetry={(id) => void handleRetryImport(id)}
-        onOpenSourceFile={(path) => void handleOpenSourceFile(path)}
-        onOpenDocumentImage={(page) => void handleOpenDocumentImage(page)}
-        onDeleteDocument={(documentId) => void handleDeleteDocument(documentId)}
-        onReanalysisRequest={handleReanalysisRequest}
-        deletingDocumentId={deletingDocumentId}
-      />
+      <div className="panel-wide">
+        <MediaAssetList
+          documents={documents}
+          pagesByDocument={pagesByDocument}
+          jobs={jobs}
+          isLoading={isDocsLoading}
+          query={query}
+          statusFilter={statusFilter}
+          onQueryChange={setQuery}
+          onStatusFilterChange={setStatusFilter}
+          onViewDocument={handleViewDocument}
+          onRetry={(documentId) => void handleRetryImport(documentId)}
+          onDeleteDocument={(documentId) => void handleDeleteDocument(documentId)}
+          deletingDocumentId={deletingDocumentId}
+        />
+      </div>
+
+      <div className="panel-wide media-document-viewer" ref={viewerRef}>
+        <DocumentFormatViewer
+          documentId={selectedDocument?.document_id ?? null}
+          documentTitle={selectedDocument?.original_filename}
+          refreshKey={viewerRefreshKey}
+        />
+      </div>
     </div>
   );
 }
@@ -390,74 +262,34 @@ function Metric({
 function computeMediaStats(
   documents: DocumentDto[],
   pagesByDocument: Record<string, PageWorkbenchDto[]>,
-  jobs: JobDto[],
 ) {
   let totalPages = 0;
-  let generatedPages = 0;
-  let pendingPages = 0;
-  let failedPages = 0;
-
-  for (const doc of documents) {
-    const pages = pagesByDocument[doc.document_id] ?? [];
-    totalPages += doc.page_count ?? pages.length;
-    for (const page of pages) {
-      if (page.image_path) {
-        generatedPages += 1;
-      }
-      if (page.status === "rendered") {
-        pendingPages += 1;
-      }
-      if (page.status === "failed") {
-        failedPages += 1;
-      }
-    }
+  let failedAnalysisItems = 0;
+  for (const document of documents) {
+    const pages = pagesByDocument[document.document_id] ?? [];
+    totalPages += document.page_count ?? pages.length;
+    failedAnalysisItems += countDocumentAnalysisFailures(document, pages);
   }
-
-  const failedDocuments = documents.filter((doc) => doc.status === "failed").length;
-  const runningJobs = jobs.filter(
-    (job) => job.status === "queued" || job.status === "running",
-  ).length;
-
   return {
     documentCount: documents.length,
     totalPages,
-    generatedPages,
-    pendingPages,
-    failureCount: failedDocuments + failedPages,
-    runningJobs,
+    analyzedPages: documents.reduce((sum, document) => sum + document.analysis_succeeded_pages, 0),
+    failureCount:
+      documents.filter((document) => document.status === "failed").length + failedAnalysisItems,
   };
-}
-
-function resolveWorkspacePath(
-  relativePath: string | null | undefined,
-  workspacePath: string | null | undefined,
-) {
-  if (!relativePath || !workspacePath) {
-    return null;
-  }
-
-  const normalized = relativePath.replace(/\\/g, "/");
-  if (
-    normalized.startsWith("/") ||
-    /^[A-Za-z]:\//.test(normalized) ||
-    normalized.split("/").includes("..")
-  ) {
-    return null;
-  }
-
-  const separator = workspacePath.includes("\\") ? "\\" : "/";
-  const root = workspacePath.replace(/[\\/]+$/, "");
-  return `${root}${separator}${normalized.replace(/\//g, separator)}`;
 }
 
 function extractError(error: unknown): { message: string; correlationId?: string | null } {
   if (typeof error === "object" && error !== null) {
-    const e = error as Record<string, unknown>;
-    const msg = typeof e.message === "string" ? e.message : null;
-    const cid = typeof e.correlation_id === "string" ? e.correlation_id : null;
-    if (msg) return { message: msg, correlationId: cid };
+    const value = error as Record<string, unknown>;
+    const message = typeof value.message === "string" ? value.message : null;
+    if (message) {
+      return {
+        message,
+        correlationId: typeof value.correlation_id === "string" ? value.correlation_id : null,
+      };
+    }
   }
   if (error instanceof Error) return { message: error.message };
-  if (typeof error === "string") return { message: error };
-  return { message: "媒体管理命令调用失败，请稍后重试。" };
+  return { message: typeof error === "string" ? error : "媒体管理命令调用失败。" };
 }

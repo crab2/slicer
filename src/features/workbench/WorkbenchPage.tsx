@@ -265,10 +265,10 @@ export function WorkbenchPage({
 
             <div className="workbench-route-grid">
               <RouteButton title="媒体导入" description="提交图片、PDF 与 Office 文档" onClick={onOpenMediaImport} />
-              <RouteButton title="媒体管理" description="查看列表、筛选、删除与选择重分析" onClick={onOpenMediaManagement} />
+              <RouteButton title="媒体管理" description="筛选、查看六种格式、失败重试与删除" onClick={onOpenMediaManagement} />
               <RouteButton title="模型分析" description="按需分析视觉模块或直接导入图片" onClick={onOpenAnalysis} />
               <RouteButton title="BM25 索引" description="查看索引状态并进入重建页" onClick={onOpenIndex} />
-              <RouteButton title="搜索" description="查询模块级内容、页内定位与只读 JSON" onClick={onOpenSearch} />
+              <RouteButton title="搜索" description="查询模块级内容并定位到六格式文档查看器" onClick={onOpenSearch} />
               <RouteButton title="一键导出" description="导出 Markdown 与媒体包" onClick={onOpenExport} />
               <RouteButton title="设置" description="配置工作区、模型和本地服务" onClick={onOpenSettings} />
             </div>

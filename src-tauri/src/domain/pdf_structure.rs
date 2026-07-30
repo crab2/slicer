@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 pub const PDF_STRUCTURE_PARSER_NAME: &str = "opendataloader-pdf";
 pub const PDF_STRUCTURE_PARSER_VERSION: &str = "2.5.0";
 pub const PDF_STRUCTURE_SCHEMA_VERSION: &str = "opendataloader_pdf_json_v2";
-pub const PDF_STRUCTURE_OPTIONS_JSON: &str = r#"{"format":"json","hybrid":"off","image_output":"external","image_format":"png","reading_order":"xycut","threads":1}"#;
+pub const PDF_STRUCTURE_OPTIONS_JSON: &str = r#"{"format":"json,markdown,html,pdf","hybrid":"off","image_output":"external","image_format":"png","reading_order":"xycut","threads":1}"#;
 pub const VISUAL_MODULE_ANALYSIS_SCHEMA_VERSION: &str = "visual_module_analysis_v1";
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]

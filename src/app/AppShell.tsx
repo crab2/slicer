@@ -11,7 +11,7 @@ import { SettingsPage } from "../features/settings/SettingsPage";
 import { WorkbenchPage } from "../features/workbench/WorkbenchPage";
 import { tauriClient } from "../lib/tauriClient";
 import type { WorkspaceStatusDto } from "../types/app";
-import { navigationItems, type NavigationContext, type ViewId } from "./navigation";
+import { navigationItems, type ViewId } from "./navigation";
 
 const pageTitles: Record<ViewId, string> = {
   workbench: "工作台",
@@ -32,8 +32,6 @@ const initialWorkspaceStatus: WorkspaceStatusDto = {
 
 export function AppShell() {
   const [activeView, setActiveView] = useState<ViewId>("workbench");
-  const [navigationContext, setNavigationContext] =
-    useState<NavigationContext | null>(null);
   const [workspaceStatus, setWorkspaceStatus] =
     useState<WorkspaceStatusDto>(initialWorkspaceStatus);
   const [isWorkspaceLoading, setIsWorkspaceLoading] = useState(true);
@@ -67,17 +65,10 @@ export function AppShell() {
 
   function handleSetActiveView(view: ViewId) {
     setActiveView(view);
-    setNavigationContext(null);
-  }
-
-  function handleNavigateWithContext(view: ViewId, context: NavigationContext) {
-    setNavigationContext(context);
-    setActiveView(view);
   }
 
   function handleReturnToSource() {
-    const target = navigationContext?.return_to ?? "mediaManagement";
-    setActiveView(target);
+    setActiveView("mediaManagement");
   }
 
   const workspaceReady = workspaceStatus.status === "ready";
@@ -166,10 +157,7 @@ export function AppShell() {
               workspaceStatus={workspaceStatus}
               isWorkspaceLoading={isWorkspaceLoading}
               isActive={activeView === "mediaManagement"}
-              navigationContext={navigationContext}
               onChooseWorkspace={handleChooseWorkspace}
-              onNavigateWithContext={handleNavigateWithContext}
-              onClearNavigationContext={() => setNavigationContext(null)}
             />
           </div>
 
@@ -177,7 +165,7 @@ export function AppShell() {
             <AnalysisPage
               workspaceReady={workspaceReady}
               isActive={activeView === "analysis"}
-              navigationContext={navigationContext}
+              navigationContext={null}
               onOpenSettings={() => handleSetActiveView("settings")}
               onReturnToSource={handleReturnToSource}
             />
