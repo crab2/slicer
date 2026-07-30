@@ -120,9 +120,6 @@ export function SettingsPage({
   }, [modelProfileForm.provider, modelProfileForm.base_url, modelProfileForm.custom_endpoint]);
 
   function validateBeforeSave(current: AppSettingsDto): string | null {
-    if (current.default_image_dpi < 72 || current.default_image_dpi > 300) {
-      return "默认图片 DPI 须在 72 到 300 之间。";
-    }
     if (current.conversion_concurrency < 1 || current.conversion_concurrency > 8) {
       return "转换并发数须在 1 到 8 之间。";
     }
@@ -533,24 +530,9 @@ export function SettingsPage({
       {/* Concurrency */}
       <section className="panel setting-row">
         <div>
-          <h2>并发与图片</h2>
-          <p className="muted-copy">
-            默认图片 DPI 144，转换并发 2，分析并发 2。
-          </p>
+          <h2>任务并发</h2>
+          <p className="muted-copy">转换并发 2，分析并发 2。</p>
           <div className="setting-fields">
-            <label>
-              <span>默认图片 DPI</span>
-              <input
-                type="number"
-                min={72}
-                max={300}
-                value={settings.default_image_dpi}
-                onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
-                  if (!isNaN(v)) updateField("default_image_dpi", v);
-                }}
-              />
-            </label>
             <label>
               <span>转换并发数</span>
               <input
@@ -595,7 +577,7 @@ export function SettingsPage({
         <div>
           <h2>隐私提示</h2>
           <p className="muted-copy">
-            所有数据默认保存在本地工作区。启用云端模型前会提示页面图片会发送到用户配置的模型服务。
+            所有数据默认保存在本地工作区。启用云端模型前会提示视觉模块图片、区域裁剪或直接导入图片会发送到用户配置的模型服务。
           </p>
         </div>
         <StatusBadge>本地优先</StatusBadge>

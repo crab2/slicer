@@ -18,6 +18,7 @@ export interface MediaAssetSelection {
   kind: "document" | "page";
   ids: string[];
   label: string;
+  retryFailedOnly?: boolean;
   disabledReason?: string | null;
 }
 
@@ -66,7 +67,13 @@ export function MediaAssetList({
   const totalPages = documents.reduce((sum, doc) => sum + (doc.page_count ?? 0), 0);
   const failedCount = documents.filter((doc) => doc.status === "failed").length;
   const failedPageCount = documents.reduce(
-    (sum, doc) => sum + doc.analysis_failed_pages,
+    (sum, doc) =>
+      sum +
+      doc.analysis_failed_pages +
+      (pagesByDocument[doc.document_id] ?? []).reduce(
+        (pageSum, page) => pageSum + countValue(page.failed_visual_module_count),
+        0,
+      ),
     0,
   );
 
@@ -137,7 +144,7 @@ export function MediaAssetList({
         {failedPageCount > 0 ? (
           <>
             <span className="doc-summary-sep">·</span>
-            <span className="doc-summary-failed">{failedPageCount} 页分析失败</span>
+            <span className="doc-summary-failed">{failedPageCount} 个分析项失败</span>
           </>
         ) : null}
       </div>
@@ -163,7 +170,7 @@ export function MediaAssetList({
               <option value="all">全部</option>
               <option value="ready">已完成</option>
               <option value="needs_analysis">待分析</option>
-              <option value="has_failed_pages">有失败页</option>
+              <option value="has_failed_pages">有失败项</option>
               <option value="failed">导入失败</option>
             </select>
           </label>
@@ -251,16 +258,22 @@ function MediaDocumentRow({
   const isImporting = doc.status === "importing" && job;
   const isFailed = doc.status === "failed";
   const failedPages = pages.filter((page) => page.status === "failed");
+  const failedVisualModuleCount = pages.reduce(
+    (sum, page) => sum + countValue(page.failed_visual_module_count),
+    0,
+  );
   const failedPageCount = Math.max(failedPages.length, doc.analysis_failed_pages);
+  const failedItemCount = failedPageCount + failedVisualModuleCount;
   const firstFailedPage = failedPages.find((page) => page.error_summary);
   const failedPageSummary = firstFailedPage?.error_summary
     ? `第 ${firstFailedPage.page_number} 页 ${firstFailedPage.error_summary}`
-    : failedPageCount > 0
-      ? `有 ${failedPageCount} 页处理失败，可展开页面详情查看。`
+    : failedItemCount > 0
+      ? `有 ${failedItemCount} 个分析项失败，可展开页面详情查看。`
       : null;
   const isDeleting = deletingDocumentId === doc.document_id;
   const firstImagePage = pages.find((page) => Boolean(page.image_path));
   const generatedPageCount = pages.filter((page) => Boolean(page.image_path)).length;
+  const structuredPageCount = pages.filter((page) => page.status === "structured").length;
   const analyzablePageCount = pages.filter((page) => page.status === "rendered").length;
   const pageTotal = doc.page_count ?? pages.length;
   const fallbackThumbnailSrc = useMemo(
@@ -338,7 +351,9 @@ function MediaDocumentRow({
         title={
           firstImagePage
             ? "查看此文档第一页图片"
-            : "页面图片生成后会出现在这里"
+            : structuredPageCount > 0
+              ? "结构化文档不生成整页预览"
+              : "此文档没有可用页面图片"
         }
       >
         {firstImagePage ? (
@@ -360,7 +375,7 @@ function MediaDocumentRow({
         ) : (
           <span className="document-thumb-placeholder">
             <strong>{doc.file_type.toUpperCase()}</strong>
-            <small>暂无页面图片</small>
+            <small>{structuredPageCount > 0 ? "无整页预览" : "暂无页面图片"}</small>
           </span>
         )}
       </button>
@@ -388,11 +403,15 @@ function MediaDocumentRow({
 
         <div className="document-asset-stats" aria-label="页面资产状态">
           <span>{pageTotal} 页</span>
-          <span>{generatedPageCount} 页已生成图片</span>
+          {structuredPageCount > 0 ? (
+            <span>{structuredPageCount} 页已结构化</span>
+          ) : (
+            <span>{generatedPageCount} 页已有图片</span>
+          )}
           <span>{doc.analysis_succeeded_pages} 页已分析</span>
           {analyzablePageCount > 0 ? <span>{analyzablePageCount} 页可分析</span> : null}
-          {failedPageCount > 0 ? (
-            <span className="doc-summary-failed">{failedPageCount} 页失败</span>
+          {failedItemCount > 0 ? (
+            <span className="doc-summary-failed">{failedItemCount} 项失败</span>
           ) : null}
         </div>
 
@@ -447,7 +466,9 @@ function MediaDocumentRow({
                           title={
                             page.image_path
                               ? "打开此页在 pages 目录中的图片"
-                              : "此页面图片不可用"
+                              : page.status === "structured"
+                                ? "此结构化页面无整页预览"
+                                : "此页面图片不可用"
                           }
                         >
                           查看页面
@@ -497,11 +518,32 @@ function MediaDocumentRow({
             title={
               firstImagePage
                 ? "打开此文档 pages 目录中的第一张页面图片"
-                : "此文档还没有可查看的页面图片"
+                : structuredPageCount > 0
+                  ? "此结构化文档无整页预览"
+                  : "此文档还没有可查看的页面图片"
             }
           >
             查看页面
           </Button>
+        ) : null}
+        {onReanalysisRequest ? (
+          failedItemCount > 0 ? (
+            <Button
+              variant="secondary"
+              className="document-row-button"
+              onClick={() =>
+                onReanalysisRequest({
+                  kind: "document",
+                  ids: [doc.document_id],
+                  label: doc.original_filename,
+                  retryFailedOnly: true,
+                })
+              }
+              title="仅重新分析此文档中的失败页面或图片模块"
+            >
+              重试失败项
+            </Button>
+          ) : null
         ) : null}
         {onReanalysisRequest ? (
           <Button
@@ -626,15 +668,18 @@ function PageAnalysisSummaryBlock({
   );
 }
 
-function getDocumentReanalysisValidation(doc: DocumentDto, pages: PageWorkbenchDto[]) {
+export function getDocumentReanalysisValidation(doc: DocumentDto, pages: PageWorkbenchDto[]) {
   if (doc.status === "failed") {
     return { disabledReason: "导入失败的媒体需先重试导入。" };
   }
   if (pages.length === 0) {
     return { disabledReason: "没有可查询的页面记录。" };
   }
+  if (pages.some((page) => countValue(page.visual_module_count) > 0)) {
+    return { disabledReason: null };
+  }
   if (!pages.some((page) => page.image_path)) {
-    return { disabledReason: "还没有生成页面图片。" };
+    return { disabledReason: "没有可重分析的图片模块。" };
   }
   if (!pages.some((page) => canReanalyzePage(page))) {
     return { disabledReason: "没有可分析或可重分析的页面。" };
@@ -643,6 +688,9 @@ function getDocumentReanalysisValidation(doc: DocumentDto, pages: PageWorkbenchD
 }
 
 function getPageReanalysisReason(page: PageWorkbenchDto) {
+  if (page.status === "structured") {
+    return "结构化 PDF 按图片模块分析，请选择整个文档。";
+  }
   if (!page.image_path) {
     return "此页还没有页面图片。";
   }
@@ -693,7 +741,7 @@ function resolveWorkspacePath(
   return `${root}${separator}${normalized.replace(/\//g, separator)}`;
 }
 
-function filterDocuments(
+export function filterDocuments(
   documents: DocumentDto[],
   pagesByDocument: Record<string, PageWorkbenchDto[]>,
   query: string,
@@ -724,9 +772,20 @@ function filterDocuments(
       case "failed":
         return doc.status === "failed";
       case "has_failed_pages":
-        return doc.analysis_failed_pages > 0 || pages.some((page) => page.status === "failed");
+        return (
+          doc.analysis_failed_pages > 0 ||
+          pages.some(
+            (page) =>
+              page.status === "failed" ||
+              countValue(page.failed_visual_module_count) > 0,
+          )
+        );
       case "needs_analysis":
-        return pages.some((page) => page.status === "rendered");
+        return pages.some(
+          (page) =>
+            page.status === "rendered" ||
+            countValue(page.pending_visual_module_count) > 0,
+        );
       case "all":
       default:
         return true;
@@ -750,6 +809,8 @@ function boundedProgress(progress: number) {
 
 function pageStatusLabel(status: string) {
   switch (status) {
+    case "structured":
+      return "已结构化";
     case "rendered":
       return "已渲染";
     case "analysis_pending":
@@ -765,6 +826,7 @@ function pageStatusLabel(status: string) {
 
 function pageStatusTone(status: string) {
   switch (status) {
+    case "structured":
     case "rendered":
     case "analyzed":
       return "success";
@@ -775,6 +837,10 @@ function pageStatusTone(status: string) {
     default:
       return "neutral";
   }
+}
+
+function countValue(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function statusLabel(status: string) {

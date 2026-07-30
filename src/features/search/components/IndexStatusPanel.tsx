@@ -82,10 +82,10 @@ export function IndexStatusPanel({ workspaceReady, isActive }: IndexStatusPanelP
           <p className="eyebrow">检索索引</p>
           <h2>BM25 索引</h2>
           <p className="muted-copy">
-            已索引 {indexStatus?.indexed_page_count ?? 0} 页，可索引{" "}
-            {indexStatus?.analyzable_page_count ?? 0} 页
+            已索引 {indexStatus?.indexed_page_count ?? 0} 个内容项，可索引{" "}
+            {indexStatus?.analyzable_page_count ?? 0} 个内容项
             {(indexStatus?.pending_index_page_count ?? 0) > 0
-              ? `（${indexStatus?.pending_index_page_count} 页待纳入）`
+              ? `（${indexStatus?.pending_index_page_count} 个内容项待纳入）`
               : ""}
             。
             {indexStatus?.stale_reason ? ` ${indexStatus.stale_reason}` : ""}

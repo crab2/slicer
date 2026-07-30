@@ -358,6 +358,8 @@ mod tests {
         let json = serde_json::to_value(&record).expect("serialize workspace settings");
 
         assert_eq!(json["model_profiles"][0]["key_configured"], true);
-        assert!(json["model_profiles"][0].get("api_key_configured").is_none());
+        assert!(json["model_profiles"][0]
+            .get("api_key_configured")
+            .is_none());
     }
 }

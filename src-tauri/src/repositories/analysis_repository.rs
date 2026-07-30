@@ -6,6 +6,7 @@ use crate::domain::page::PageRecordDto;
 use crate::errors::{AppError, AppResult};
 use crate::repositories::db::block_on_db;
 use crate::repositories::document_repository::DocumentRepository;
+use crate::repositories::pdf_structure_repository::PdfStructureRepository;
 use chrono::Utc;
 use sqlx::SqliteConnection;
 use uuid::Uuid;
@@ -124,13 +125,18 @@ impl AnalysisRepository {
         conn: &mut SqliteConnection,
         page: PageRecordDto,
     ) -> AppResult<PageWorkbenchDto> {
-        let image_path = DocumentRepository::find_image_asset_by_hash(conn, &page.image_hash)?
-            .map(|asset| asset.file_path);
+        let image_path = match page.image_hash.as_deref() {
+            Some(image_hash) => DocumentRepository::find_image_asset_by_hash(conn, image_hash)?
+                .map(|asset| asset.file_path),
+            None => None,
+        };
         let analysis_summary = if page.status == "analyzed" {
             Self::find_summary_for_page(conn, &page.page_id)?
         } else {
             None
         };
+        let visual_counts =
+            PdfStructureRepository::visual_module_counts_for_page(conn, &page.page_id)?;
         Ok(PageWorkbenchDto {
             page_id: page.page_id,
             document_id: page.document_id,
@@ -142,6 +148,10 @@ impl AnalysisRepository {
             created_at: page.created_at,
             updated_at: page.updated_at,
             analysis_summary,
+            visual_module_count: visual_counts.map(|counts| counts.total),
+            pending_visual_module_count: visual_counts.map(|counts| counts.pending),
+            succeeded_visual_module_count: visual_counts.map(|counts| counts.succeeded),
+            failed_visual_module_count: visual_counts.map(|counts| counts.failed),
         })
     }
 

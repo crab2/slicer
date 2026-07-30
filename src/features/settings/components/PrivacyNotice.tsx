@@ -25,8 +25,10 @@ export function PrivacyNotice({
       >
         <h2 id="privacy-notice-title">云端模型隐私提示</h2>
         <p className="muted-copy">
-          启用页面分析后，页面图片将发送到您在设置中配置的模型服务（base URL 或自定义
-          endpoint）。请确认您信任该服务的数据处理策略。
+          启用模型分析后，OpenDataLoader 从 PDF 中提取的视觉模块图片、直接导入的图片，
+          以及旧版本已生成的兼容页面图，将发送到您配置的模型服务（base URL 或自定义 endpoint）。
+          新导入 PDF 的整页和结构化文本不会因此发送。
+          请确认您信任该服务的数据处理策略。
         </p>
         <p className="muted-copy">
           API 密钥仅保存在系统凭据存储中，不会写入工作区数据库或导出文件。

@@ -218,8 +218,46 @@ impl DocumentRepository {
             page_id,
             document_id: document_id.to_string(),
             page_number,
-            image_hash: image_hash.to_string(),
+            image_hash: Some(image_hash.to_string()),
             status: "rendered".to_string(),
+            error_summary: None,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+    }
+
+    pub fn create_structured_page_record(
+        conn: &mut SqliteConnection,
+        document_id: &str,
+        page_number: i64,
+    ) -> AppResult<PageRecordDto> {
+        let page_id = format!("{document_id}_{page_number}");
+        let now = Utc::now().to_rfc3339();
+
+        block_on_db(async {
+            sqlx::query(
+                "INSERT INTO page_records
+                 (page_id, document_id, page_number, image_hash, status, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, 'structured', ?4, ?4)",
+            )
+            .bind(&page_id)
+            .bind(document_id)
+            .bind(page_number)
+            .bind(&now)
+            .execute(&mut *conn)
+            .await
+            .map_err(|err| {
+                super::db::database_error("import", "structured_page_record_create_failed", err)
+            })?;
+            Ok(())
+        })?;
+
+        Ok(PageRecordDto {
+            page_id,
+            document_id: document_id.to_string(),
+            page_number,
+            image_hash: None,
+            status: "structured".to_string(),
             error_summary: None,
             created_at: now.clone(),
             updated_at: now,
@@ -262,6 +300,55 @@ impl DocumentRepository {
             .execute(&mut *conn)
             .await
             .map_err(|err| super::db::database_error("analysis", "page_status_update_failed", err))?;
+            Ok(())
+        })
+    }
+
+    pub fn update_page_pdf_geometry(
+        conn: &mut SqliteConnection,
+        page_id: &str,
+        geometry: crate::domain::pdf_structure::PdfPageGeometry,
+    ) -> AppResult<()> {
+        if !geometry.is_valid() {
+            return Err(crate::errors::AppError::new(
+                "page_pdf_geometry_invalid",
+                "PDF 页面几何信息无效。",
+                "import",
+                false,
+            ));
+        }
+        block_on_db(async {
+            let result = sqlx::query(
+                "UPDATE page_records
+                 SET pdf_width_points = ?1, pdf_height_points = ?2,
+                     crop_left_points = ?3, crop_bottom_points = ?4,
+                     crop_right_points = ?5, crop_top_points = ?6,
+                      rotation_degrees = ?7, preview_width_px = NULL,
+                      preview_height_px = NULL, updated_at = ?8
+                  WHERE page_id = ?9",
+            )
+            .bind(geometry.width_points)
+            .bind(geometry.height_points)
+            .bind(geometry.crop_left_points)
+            .bind(geometry.crop_bottom_points)
+            .bind(geometry.crop_right_points)
+            .bind(geometry.crop_top_points)
+            .bind(geometry.rotation_degrees)
+            .bind(chrono::Utc::now().to_rfc3339())
+            .bind(page_id)
+            .execute(conn)
+            .await
+            .map_err(|err| {
+                super::db::database_error("import", "page_pdf_geometry_update_failed", err)
+            })?;
+            if result.rows_affected() != 1 {
+                return Err(crate::errors::AppError::new(
+                    "page_not_found",
+                    "找不到需要记录几何信息的 PDF 页面。",
+                    "import",
+                    false,
+                ));
+            }
             Ok(())
         })
     }
@@ -401,8 +488,8 @@ impl DocumentRepository {
 
                 let mut asset_paths = HashMap::new();
                 for row in asset_rows {
-                    if let Some(file_path) = row.file_path {
-                        asset_paths.entry(row.image_hash).or_insert(file_path);
+                    if let (Some(image_hash), Some(file_path)) = (row.image_hash, row.file_path) {
+                        asset_paths.entry(image_hash).or_insert(file_path);
                     }
                 }
 
@@ -639,7 +726,7 @@ struct PageRow {
     page_id: String,
     document_id: String,
     page_number: i64,
-    image_hash: String,
+    image_hash: Option<String>,
     status: String,
     error_summary: Option<String>,
     created_at: String,
@@ -671,7 +758,7 @@ struct ImageAssetRow {
 
 #[derive(sqlx::FromRow)]
 struct ImageAssetPathRow {
-    image_hash: String,
+    image_hash: Option<String>,
     file_path: Option<String>,
 }
 

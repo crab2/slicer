@@ -2,15 +2,15 @@
 
 # SLICER
 
-SLICER is a local-first desktop tool for document page slicing and retrieval. It converts PDF, PPT, PPTX, DOC, and DOCX files into page-level images, uses a multimodal model to generate structured page JSON metadata, and builds a local BM25 index for traceable search results.
+SLICER is a local-first desktop tool for structured document retrieval. It preserves imported PDFs and PDFs converted from Office files, extracts paragraphs, headings, tables, images, and their coordinates with OpenDataLoader PDF, sends only visual modules that need interpretation to a multimodal model, and builds a local BM25 index whose results can be highlighted within the source page.
 
-The project is built with Tauri, React, TypeScript, and Rust. Windows is the first-priority platform. Documents, page images, the database, JSONL metadata, and indexes are stored by default in the local workspace selected by the user. SLICER does not perform cloud sync by default.
+The project is built with Tauri, React, TypeScript, and Rust. Windows is the first-priority platform. Documents, extracted images, the database, JSONL metadata, and indexes are stored by default in the local workspace selected by the user. SLICER does not perform cloud sync by default.
 
 ## Use Cases
 
 - Local knowledge base organization: convert courseware, reports, proposals, policies, papers, and other materials into page-level knowledge assets.
-- Document page retrieval: search page titles, summaries, visible text, topics, keywords, and source filenames.
-- Multimodal page understanding: analyze page images into structured JSON through a user-configured vision or multimodal model.
+- Document module retrieval: search paragraphs, headings, tables, visual descriptions, and source filenames, with page-region provenance.
+- On-demand visual understanding: analyze meaningful PDF image modules through a configured multimodal model; direct image imports retain whole-image analysis.
 - Enterprise document archiving: organize training materials, sales decks, proposal documents, and workflow documentation.
 - Local automation integration: query search results, page records, document records, or trigger index rebuilds through the localhost HTTP API.
 
@@ -18,16 +18,17 @@ The project is built with Tauri, React, TypeScript, and Rust. Windows is the fir
 
 - Select a local workspace and initialize its directory structure automatically.
 - Import PDF, DOC, DOCX, PPT, and PPTX files.
-- Render PDF files into per-page PNG images.
-- Convert Office documents to PDF through local LibreOffice headless mode, then render them into PNG images.
-- Name page images by content hash to reduce duplicate image conflicts.
+- Preserve canonical PDFs and extract reading order, module types, text, page numbers, and bounding boxes with OpenDataLoader PDF.
+- Do not render per-page PNGs for PDFs. PDFium reads only page count, CropBox, and rotation metadata before the canonical PDF is sent directly to OpenDataLoader.
+- Convert Office documents through local LibreOffice headless mode, then run the same structured PDF pipeline.
+- Register OpenDataLoader-extracted PDF images by content hash; direct image imports remain content-addressed.
 - Store document, page, job, analysis, index, and settings state in SQLite.
 - Export page-level metadata to `metadata/pages.jsonl`.
 - Configure model provider, Base URL, custom endpoint, model name, and API key.
-- Analyze page images and generate `page_analysis_v1` JSON.
-- Support single-page analysis, batch analysis of new pages, document reanalysis, and failed-page retry.
+- Analyze only non-decorative visual modules and persist `visual_module_analysis_v1` enrichment; direct images and historical data remain compatible with `page_analysis_v1`.
+- Track and retry visual-module failures independently without discarding extracted text.
 - Build and rebuild a local BM25 index.
-- Search pages in the desktop GUI, with image preview and page JSON inspection.
+- Search modules in the desktop GUI with module JSON and bounding boxes; previews remain available for direct images and historical page images.
 - Optionally enable a localhost HTTP API.
 
 ## Tech Stack
@@ -39,6 +40,7 @@ The project is built with Tauri, React, TypeScript, and Rust. Windows is the fir
 - Search: Tantivy BM25
 - HTTP API: Axum
 - PDF rendering: Pdfium
+- PDF structure extraction: OpenDataLoader PDF 2.5.0 (local Java process)
 - Office conversion: LibreOffice headless
 - Secret storage: system credential storage; API keys are not written to ordinary config files
 
@@ -46,10 +48,11 @@ The project is built with Tauri, React, TypeScript, and Rust. Windows is the fir
 
 ### Required
 
-1. Node.js: `20.19+` or `22.12+` is recommended.
+1. Node.js: `22.12+` is required.
 2. Rust stable and Cargo.
 3. Tauri 2 system dependencies.
-4. On Windows, Microsoft WebView2 Runtime and C++ Build Tools are recommended.
+4. Java 11+: required for PDF and Office structure extraction. The app bundles a pinned OpenDataLoader PDF JAR, but does not bundle a JRE.
+5. On Windows, Microsoft WebView2 Runtime and C++ Build Tools are recommended.
 
 ### Optional
 
@@ -122,7 +125,9 @@ workspace/
 Notes:
 
 - `originals/` stores copies of imported source documents.
-- `pages/` stores rendered per-page PNG images.
+- `pages/` stores direct image imports and historical compatibility page images; new PDF/Office imports do not create per-page PNGs there.
+- `pdfs/` stores canonical PDFs.
+- `structure/` stores raw OpenDataLoader JSON and extracted image resources.
 - `metadata/pages.jsonl` stores page-level JSONL exports.
 - `indexes/bm25/` stores the local search index.
 - `app.db` is the local SQLite ledger.
@@ -133,8 +138,8 @@ Notes:
 Open the Workbench, click "Select Files", and choose one or more documents:
 
 - Supported extensions: `.pdf`, `.doc`, `.docx`, `.ppt`, `.pptx`
-- PDF files are rendered directly into page images.
-- Office documents are converted to PDF through LibreOffice, then rendered into page images.
+- PDF files are preserved and directly extracted into structured modules and embedded images without per-page previews.
+- Office documents are converted through LibreOffice to canonical PDF, then use the same direct structured extraction pipeline.
 
 If an Office document is imported before LibreOffice is configured, the task fails with a recoverable error. Configure the path, then import again or retry.
 
@@ -164,15 +169,15 @@ Open Settings and fill in the model configuration:
 - Model Name
 - API Key
 
-The API key is saved through system credential storage and is not written to ordinary config files. Before cloud model analysis is enabled, the app shows a privacy notice explaining that page images will be sent to the configured model service.
+The API key is saved through system credential storage and is not written to ordinary config files. Before cloud model analysis is enabled, the app shows a privacy notice explaining that OpenDataLoader-extracted PDF images or direct image imports will be sent to the configured model service.
 
 Model analysis requires a supported remote vision provider and privacy notice confirmation.
 
-### 5. Analyze Pages
+### 5. Analyze Visual Modules
 
-After import completes, click "Analyze New Pages" in the Workbench model analysis section.
+After import completes, click "Analyze New Content" in the Workbench model analysis section.
 
-After analysis, each page receives JSON that conforms to `page_analysis_v1`. The analysis result is written to SQLite and exported to:
+Structured PDF text is searchable without a model call. Only non-decorative images, charts, and similar visual modules are sent to the model and receive `visual_module_analysis_v1` enrichment. Direct image imports and historical page analyses continue to use `page_analysis_v1` and can be exported to:
 
 ```text
 metadata/pages.jsonl
@@ -182,7 +187,7 @@ metadata/pages.jsonl
 
 Open the Search page or the index status section in the Workbench, then click "Build Index" or "Rebuild Index".
 
-The index is built from analyzed pages. Search text includes:
+The index is built from OpenDataLoader modules, visual enrichment, and compatible historical page analyses. Search text includes:
 
 - Page title
 - Summary
@@ -202,8 +207,9 @@ Open the Search page, enter a keyword, and run the search. Results include:
 - Source document
 - Page number
 - Relevance score
-- Page image preview
-- Page JSON
+- Page preview when a direct or historical page image exists
+- Matched module JSON
+- Module type and normalized bounding box, highlighted when a compatible preview exists and coordinates are valid
 
 ## Localhost HTTP API
 
@@ -326,7 +332,7 @@ cargo check
 - SLICER is local-first by default. Documents, images, the database, and indexes are stored in the workspace selected by the user.
 - The app does not perform cloud sync by default.
 - API keys are stored through system credential storage and should not appear in logs, exported JSON, error messages, or search results.
-- Page images are sent to a model service only when cloud or custom model analysis is enabled.
+- OpenDataLoader-extracted PDF images or direct image imports are sent only when cloud or custom model analysis is enabled; full PDF pages and structured text are not sent.
 - The Localhost API binds to `127.0.0.1` by default and should not listen on a public network address by default.
 - Write endpoints such as index rebuild require a local token.
 
@@ -366,13 +372,17 @@ Make sure LibreOffice is installed and the path in Settings is correct. You can 
 
 The file may be corrupted, encrypted, or Pdfium may be unavailable. First verify that the PDF can be opened in a normal PDF reader.
 
+### PDF Structure Extraction Fails
+
+Verify that `java -version` runs and reports Java 11 or newer. The app validates its bundled OpenDataLoader PDF JAR; validation or extraction failures do not silently fall back to sending every page image to the model.
+
 ### Model Analysis Is Unavailable
 
 Check Provider, Base URL, Custom Endpoint, Model Name, and API Key in Settings. Cloud model use also requires accepting the privacy notice.
 
 ### Search Is Unavailable
 
-Search depends on analyzed pages and the BM25 index. Analyze pages first, then build or rebuild the index from the Search page.
+Structured text can be indexed directly; visual modules must be analyzed first. Build or rebuild from the Search page. A legacy page-level index remains active until a validated module-level index is activated.
 
 ### Localhost API Is Unavailable
 

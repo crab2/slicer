@@ -2,6 +2,9 @@ use crate::domain::analysis::{
     PageAnalysisContent, PageAnalysisModelInfo, PageAnalysisSource, PageAnalysisV1,
     PageRetrievalFields, ProviderResponseRecord, PAGE_ANALYSIS_SCHEMA_VERSION,
 };
+use crate::domain::pdf_structure::{
+    VisualModuleAnalysisModelInfo, VisualModuleAnalysisV1, VISUAL_MODULE_ANALYSIS_SCHEMA_VERSION,
+};
 use crate::errors::{AppError, AppResult};
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,6 +14,11 @@ const MAX_ANALYSIS_TEXT_CHARS: usize = 50_000;
 const MAX_TOTAL_TEXT_CHARS: usize = 250_000;
 const MAX_RAW_JSON_BYTES: usize = 1_000_000;
 const MAX_ARRAY_ITEMS: usize = 512;
+const MAX_VISUAL_RAW_JSON_BYTES: usize = 256_000;
+const MAX_VISUAL_DESCRIPTION_CHARS: usize = 4_000;
+const MAX_VISUAL_TEXT_CHARS: usize = 20_000;
+const MAX_VISUAL_KEYWORDS: usize = 32;
+const MAX_VISUAL_KEYWORD_CHARS: usize = 256;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExpectedPageContext {
@@ -19,6 +27,13 @@ pub struct ExpectedPageContext {
     pub page_number: i64,
     pub image_hash: String,
     pub image_path: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExpectedVisualModuleContext {
+    pub block_id: String,
+    pub provider: String,
+    pub model_name: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -39,6 +54,17 @@ struct RawPageAnalysisV1 {
 #[serde(deny_unknown_fields)]
 struct RawPageRetrievalFields {
     bm25_text: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawVisualModuleAnalysisV1 {
+    schema_version: Option<String>,
+    block_id: Option<String>,
+    description: Option<String>,
+    visible_text: Option<String>,
+    keywords: Option<Vec<String>>,
+    model: Option<VisualModuleAnalysisModelInfo>,
 }
 
 pub fn validate_page_analysis_v1(
@@ -159,6 +185,205 @@ pub fn validate_page_analysis_v1(
         model,
         provider_response: raw.provider_response,
     })
+}
+
+pub fn validate_visual_module_analysis_v1(
+    raw_json: &str,
+    expected: &ExpectedVisualModuleContext,
+) -> AppResult<VisualModuleAnalysisV1> {
+    if raw_json.len() > MAX_VISUAL_RAW_JSON_BYTES {
+        return Err(visual_validation_error(
+            "visual_module_payload_too_large",
+            "Visual-module response exceeds the safe payload size limit.",
+            true,
+        )
+        .with_details(format!(
+            "path=$; limit_bytes={MAX_VISUAL_RAW_JSON_BYTES}; actual_bytes={}",
+            raw_json.len()
+        )));
+    }
+    let normalized_json = extract_json_object(raw_json).map_err(|err| {
+        visual_validation_error(
+            "visual_module_json_invalid",
+            "Model response did not contain a complete visual-module JSON object.",
+            true,
+        )
+        .with_details(format!(
+            "path=$; bytes={}; cause={}",
+            raw_json.len(),
+            err.code
+        ))
+    })?;
+    if normalized_json.len() > MAX_VISUAL_RAW_JSON_BYTES {
+        return Err(visual_validation_error(
+            "visual_module_payload_too_large",
+            "Visual-module response exceeds the safe payload size limit.",
+            true,
+        )
+        .with_details(format!(
+            "path=$; limit_bytes={MAX_VISUAL_RAW_JSON_BYTES}; actual_bytes={}",
+            normalized_json.len()
+        )));
+    }
+
+    let value: Value = serde_json::from_str(&normalized_json).map_err(|err| {
+        visual_validation_error(
+            "visual_module_json_invalid",
+            "Visual-module response JSON could not be parsed.",
+            true,
+        )
+        .with_details(format!(
+            "path=$; line={}; column={}; bytes={}",
+            err.line(),
+            err.column(),
+            normalized_json.len()
+        ))
+    })?;
+    let raw: RawVisualModuleAnalysisV1 =
+        serde_path_to_error::deserialize(value).map_err(|err| {
+            visual_validation_error(
+                "visual_module_field_invalid",
+                "Visual-module response fields do not match the required schema.",
+                true,
+            )
+            .with_details(format!("path={}; summary={}", err.path(), err.inner()))
+        })?;
+
+    let schema_version = require_visual_string(raw.schema_version, "schema_version")?;
+    if schema_version != VISUAL_MODULE_ANALYSIS_SCHEMA_VERSION {
+        return Err(visual_validation_error(
+            "visual_module_schema_version_unsupported",
+            "Visual-module response uses an unsupported schema version.",
+            true,
+        )
+        .with_details(format!(
+            "path=schema_version; expected={VISUAL_MODULE_ANALYSIS_SCHEMA_VERSION}; actual={schema_version}"
+        )));
+    }
+
+    let block_id = require_visual_string(raw.block_id, "block_id")?;
+    if block_id != expected.block_id {
+        return Err(visual_validation_error(
+            "visual_module_block_id_mismatch",
+            "Visual-module response block identity does not match the requested block.",
+            true,
+        )
+        .with_details(format!(
+            "path=block_id; expected={}; actual={block_id}",
+            expected.block_id
+        )));
+    }
+
+    let description = require_visual_string(raw.description, "description")?
+        .trim()
+        .to_string();
+    let visible_text = require_visual_string(raw.visible_text, "visible_text")?
+        .trim()
+        .to_string();
+    validate_visual_text_length(&description, "description", MAX_VISUAL_DESCRIPTION_CHARS)?;
+    validate_visual_text_length(&visible_text, "visible_text", MAX_VISUAL_TEXT_CHARS)?;
+    if description.is_empty() && visible_text.is_empty() {
+        return Err(visual_validation_error(
+            "visual_module_content_missing",
+            "Visual-module response contains no description or visible text.",
+            true,
+        )
+        .with_details("path=description|visible_text; summary=both fields are empty"));
+    }
+
+    let keywords = raw
+        .keywords
+        .ok_or_else(|| visual_missing_field_error("keywords"))?;
+    if keywords.len() > MAX_VISUAL_KEYWORDS {
+        return Err(visual_validation_error(
+            "visual_module_array_too_large",
+            "Visual-module keyword list exceeds the safe item limit.",
+            true,
+        )
+        .with_details(format!(
+            "path=keywords; limit_items={MAX_VISUAL_KEYWORDS}; actual_items={}",
+            keywords.len()
+        )));
+    }
+    let mut normalized_keywords = Vec::with_capacity(keywords.len());
+    for (index, keyword) in keywords.into_iter().enumerate() {
+        let keyword = keyword.trim().to_string();
+        validate_visual_text_length(
+            &keyword,
+            &format!("keywords[{index}]"),
+            MAX_VISUAL_KEYWORD_CHARS,
+        )?;
+        if !keyword.is_empty() && !normalized_keywords.contains(&keyword) {
+            normalized_keywords.push(keyword);
+        }
+    }
+
+    let model = raw
+        .model
+        .ok_or_else(|| visual_missing_field_error("model"))?;
+    if model.provider != expected.provider {
+        return Err(visual_validation_error(
+            "visual_module_provider_mismatch",
+            "Visual-module response provider does not match the configured provider.",
+            true,
+        )
+        .with_details(format!(
+            "path=model.provider; expected={}; actual={}",
+            expected.provider, model.provider
+        )));
+    }
+    if model.model_name != expected.model_name {
+        return Err(visual_validation_error(
+            "visual_module_model_mismatch",
+            "Visual-module response model does not match the configured model.",
+            true,
+        )
+        .with_details(format!(
+            "path=model.model_name; expected={}; actual={}",
+            expected.model_name, model.model_name
+        )));
+    }
+
+    Ok(VisualModuleAnalysisV1 {
+        schema_version,
+        block_id,
+        description,
+        visible_text,
+        keywords: normalized_keywords,
+        model,
+    })
+}
+
+fn validate_visual_text_length(value: &str, path: &str, max_chars: usize) -> AppResult<()> {
+    let actual_chars = value.chars().count();
+    if actual_chars > max_chars {
+        return Err(visual_validation_error(
+            "visual_module_text_too_long",
+            "Visual-module response text exceeds the safe length limit.",
+            true,
+        )
+        .with_details(format!(
+            "path={path}; limit_chars={max_chars}; actual_chars={actual_chars}"
+        )));
+    }
+    Ok(())
+}
+
+fn require_visual_string(value: Option<String>, path: &str) -> AppResult<String> {
+    value.ok_or_else(|| visual_missing_field_error(path))
+}
+
+fn visual_missing_field_error(path: &str) -> AppError {
+    visual_validation_error(
+        "visual_module_field_missing",
+        "Visual-module response is missing a required field.",
+        true,
+    )
+    .with_details(format!("path={path}; summary=required field missing"))
+}
+
+fn visual_validation_error(code: &str, message: &str, retryable: bool) -> AppError {
+    AppError::new(code, message, "visual_module_validation", retryable)
 }
 
 fn extract_json_object(raw: &str) -> AppResult<String> {
@@ -394,8 +619,12 @@ fn validation_error(code: &str, message: &str, retryable: bool) -> AppError {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_page_analysis_v1, ExpectedPageContext};
+    use super::{
+        validate_page_analysis_v1, validate_visual_module_analysis_v1, ExpectedPageContext,
+        ExpectedVisualModuleContext,
+    };
     use crate::domain::analysis::PAGE_ANALYSIS_SCHEMA_VERSION;
+    use serde_json::Value;
 
     fn expected_page() -> ExpectedPageContext {
         ExpectedPageContext {
@@ -405,6 +634,29 @@ mod tests {
             image_hash: "hash-1".to_string(),
             image_path: "pages/doc-1/hash-1.png".to_string(),
         }
+    }
+
+    fn expected_visual_module() -> ExpectedVisualModuleContext {
+        ExpectedVisualModuleContext {
+            block_id: "block-1".to_string(),
+            provider: "openai".to_string(),
+            model_name: "vision-model".to_string(),
+        }
+    }
+
+    fn valid_visual_module_json() -> String {
+        serde_json::json!({
+            "schema_version": "visual_module_analysis_v1",
+            "block_id": "block-1",
+            "description": "A chart comparing quarterly revenue.",
+            "visible_text": "Q1 Q2 Q3 Q4",
+            "keywords": ["chart", "revenue", "chart"],
+            "model": {
+                "provider": "openai",
+                "model_name": "vision-model"
+            }
+        })
+        .to_string()
     }
 
     fn valid_json_without_bm25() -> String {
@@ -628,5 +880,43 @@ mod tests {
         let details = err.details.unwrap();
         assert!(details.contains("analysis.visible_text"));
         assert!(details.len() < 200);
+    }
+
+    #[test]
+    fn validates_visual_module_and_normalizes_keywords() {
+        let analysis = validate_visual_module_analysis_v1(
+            &valid_visual_module_json(),
+            &expected_visual_module(),
+        )
+        .expect("valid visual module");
+
+        assert_eq!(analysis.block_id, "block-1");
+        assert_eq!(analysis.keywords, vec!["chart", "revenue"]);
+        assert_eq!(analysis.model.provider, "openai");
+    }
+
+    #[test]
+    fn rejects_visual_module_identity_or_source_overwrite_fields() {
+        let mismatched = valid_visual_module_json().replace("block-1", "block-other");
+        let err = validate_visual_module_analysis_v1(&mismatched, &expected_visual_module())
+            .expect_err("block identity mismatch");
+        assert_eq!(err.code, "visual_module_block_id_mismatch");
+
+        let mut value: Value = serde_json::from_str(&valid_visual_module_json()).expect("json");
+        value["source_text"] = Value::String("replacement".to_string());
+        value["bbox"] = serde_json::json!([0, 0, 1, 1]);
+        let err = validate_visual_module_analysis_v1(&value.to_string(), &expected_visual_module())
+            .expect_err("unknown source fields must be rejected");
+        assert_eq!(err.code, "visual_module_field_invalid");
+    }
+
+    #[test]
+    fn rejects_empty_visual_module_enrichment() {
+        let raw = valid_visual_module_json()
+            .replace("A chart comparing quarterly revenue.", "")
+            .replace("Q1 Q2 Q3 Q4", "");
+        let err = validate_visual_module_analysis_v1(&raw, &expected_visual_module())
+            .expect_err("empty enrichment should fail");
+        assert_eq!(err.code, "visual_module_content_missing");
     }
 }

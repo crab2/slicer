@@ -770,9 +770,9 @@ impl SettingsService {
         WorkspaceSettingsRepository::new(layout).get_privacy_notice_accepted()
     }
 
-    pub fn requires_privacy_notice(settings: &AppSettingsDto) -> bool {
+    pub fn requires_privacy_notice(_settings: &AppSettingsDto) -> bool {
         #[cfg(test)]
-        if Self::normalized_model_provider(settings) == "local_mock" {
+        if Self::normalized_model_provider(_settings) == "local_mock" {
             return false;
         }
         true
@@ -969,14 +969,6 @@ impl SettingsService {
                 true,
             )
             .with_details(format!("provider={model_provider}")));
-        }
-        if settings.default_image_dpi < 72 || settings.default_image_dpi > 300 {
-            return Err(AppError::new(
-                "settings_validation_failed",
-                "默认图片 DPI 须在 72 到 300 之间。",
-                "settings",
-                true,
-            ));
         }
         if settings.conversion_concurrency < 1 || settings.conversion_concurrency > 8 {
             return Err(AppError::new(
@@ -1279,6 +1271,14 @@ mod tests {
         settings.api_enabled = true;
         settings.api_bind_address = "0.0.0.0".to_string();
         assert!(SettingsService::validate_settings(&settings).is_err());
+    }
+
+    #[test]
+    fn legacy_image_dpi_does_not_block_saving_current_settings() {
+        let mut settings = AppSettingsDto::default();
+        settings.default_image_dpi = 1;
+        SettingsService::validate_settings(&settings)
+            .expect("obsolete image DPI is retained only for settings compatibility");
     }
 
     #[test]

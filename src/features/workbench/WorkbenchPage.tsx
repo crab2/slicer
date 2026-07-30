@@ -236,15 +236,15 @@ export function WorkbenchPage({
           <section className="panel panel-wide workbench-summary-panel" aria-label="工作台摘要">
             <div className="workbench-summary-grid">
               <WorkbenchMetric label="媒体" value={workbenchStats.documentCount} helper="已进入工作区" />
-              <WorkbenchMetric label="页面图片" value={workbenchStats.generatedPages} helper={`共 ${workbenchStats.totalPages} 页`} />
-              <WorkbenchMetric label="待分析" value={workbenchStats.pendingPages} helper="进入模型分析处理" />
+              <WorkbenchMetric label="整页预览" value={workbenchStats.generatedPages} helper={`共 ${workbenchStats.totalPages} 页`} />
+              <WorkbenchMetric label="待分析" value={workbenchStats.pendingItems} helper="页面或图片模块" />
               <WorkbenchMetric
                 label="失败"
                 value={workbenchStats.failureCount}
                 helper="在媒体管理查看"
                 tone={workbenchStats.failureCount > 0 ? "danger" : "neutral"}
               />
-              <WorkbenchMetric label="索引页" value={workbenchStats.indexedPages} helper={workbenchStats.indexHelper} />
+              <WorkbenchMetric label="索引项" value={workbenchStats.indexedPages} helper={workbenchStats.indexHelper} />
               <WorkbenchMetric label="处理中" value={workbenchStats.runningJobs} helper="最近任务" />
             </div>
           </section>
@@ -266,9 +266,9 @@ export function WorkbenchPage({
             <div className="workbench-route-grid">
               <RouteButton title="媒体导入" description="提交图片、PDF 与 Office 文档" onClick={onOpenMediaImport} />
               <RouteButton title="媒体管理" description="查看列表、筛选、删除与选择重分析" onClick={onOpenMediaManagement} />
-              <RouteButton title="模型分析" description="分析新页面或处理重分析上下文" onClick={onOpenAnalysis} />
+              <RouteButton title="模型分析" description="按需分析视觉模块或直接导入图片" onClick={onOpenAnalysis} />
               <RouteButton title="BM25 索引" description="查看索引状态并进入重建页" onClick={onOpenIndex} />
-              <RouteButton title="搜索" description="查询页面级内容与只读 JSON" onClick={onOpenSearch} />
+              <RouteButton title="搜索" description="查询模块级内容、页内定位与只读 JSON" onClick={onOpenSearch} />
               <RouteButton title="一键导出" description="导出 Markdown 与媒体包" onClick={onOpenExport} />
               <RouteButton title="设置" description="配置工作区、模型和本地服务" onClick={onOpenSettings} />
             </div>
@@ -334,7 +334,9 @@ function computeWorkbenchStats(
   let totalPages = 0;
   let generatedPages = 0;
   let pendingPages = 0;
+  let pendingVisualModules = 0;
   let failedPages = 0;
+  let failedVisualModules = 0;
 
   for (const doc of documents) {
     const pages = pagesByDocument[doc.document_id] ?? [];
@@ -349,6 +351,8 @@ function computeWorkbenchStats(
       if (page.status === "failed") {
         failedPages += 1;
       }
+      pendingVisualModules += countValue(page.pending_visual_module_count);
+      failedVisualModules += countValue(page.failed_visual_module_count);
     }
   }
 
@@ -367,12 +371,16 @@ function computeWorkbenchStats(
     documentCount: documents.length,
     totalPages,
     generatedPages,
-    pendingPages,
-    failureCount: failedDocuments + failedPages,
+    pendingItems: pendingPages + pendingVisualModules,
+    failureCount: failedDocuments + failedPages + failedVisualModules,
     runningJobs,
     indexedPages,
     indexHelper,
   };
+}
+
+function countValue(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function extractError(error: unknown): { message: string; correlationId?: string | null } {

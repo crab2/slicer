@@ -39,6 +39,34 @@ impl JobOrchestrator {
         self.ledger.mark_job_failed(job_id, error, summary)
     }
 
+    pub fn complete_import(
+        &self,
+        connection: &mut sqlx::SqliteConnection,
+        document_id: &str,
+        job_id: &str,
+        page_count: i64,
+        message: &str,
+    ) -> AppResult<()> {
+        LedgerRepository::complete_import_transaction(
+            connection,
+            document_id,
+            job_id,
+            page_count,
+            message,
+        )
+    }
+
+    pub fn fail_import_if_active(
+        &self,
+        document_id: &str,
+        job_id: &str,
+        error: &AppError,
+        summary: &str,
+    ) -> AppResult<bool> {
+        self.ledger
+            .fail_import_if_active(document_id, job_id, error, summary)
+    }
+
     pub fn recover_interrupted_jobs(&self) -> AppResult<Vec<JobDto>> {
         self.ledger.recover_interrupted_jobs()
     }

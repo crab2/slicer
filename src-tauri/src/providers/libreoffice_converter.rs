@@ -12,6 +12,10 @@ impl LibreOfficeConverter {
     pub fn new(libreoffice_path: String) -> Self {
         Self { libreoffice_path }
     }
+
+    pub fn validate_configuration(&self) -> AppResult<()> {
+        resolve_libreoffice_executable(&self.libreoffice_path).map(|_| ())
+    }
 }
 
 impl DocumentConverter for LibreOfficeConverter {

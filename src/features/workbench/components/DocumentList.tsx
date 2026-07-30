@@ -56,7 +56,13 @@ export function DocumentList({
   const totalPages = documents.reduce((sum, doc) => sum + (doc.page_count ?? 0), 0);
   const failedCount = documents.filter((d) => d.status === "failed").length;
   const failedPageCount = documents.reduce(
-    (sum, doc) => sum + doc.analysis_failed_pages,
+    (sum, doc) =>
+      sum +
+      doc.analysis_failed_pages +
+      (pagesByDocument[doc.document_id] ?? []).reduce(
+        (pageSum, page) => pageSum + countValue(page.failed_visual_module_count),
+        0,
+      ),
     0,
   );
   const filteredDocuments = useMemo(
@@ -203,18 +209,28 @@ function DocumentRow({
   const isImporting = doc.status === "importing" && job;
   const isFailed = doc.status === "failed";
   const failedPages = pages.filter((page) => page.status === "failed");
+  const failedVisualModuleCount = pages.reduce(
+    (sum, page) => sum + countValue(page.failed_visual_module_count),
+    0,
+  );
   const failedPageCount = Math.max(failedPages.length, doc.analysis_failed_pages);
+  const failedItemCount = failedPageCount + failedVisualModuleCount;
   const firstFailedPage = failedPages.find((page) => page.error_summary);
   const failedPageSummary = firstFailedPage?.error_summary
     ? `第 ${firstFailedPage.page_number} 页 ${firstFailedPage.error_summary}`
-    : failedPageCount > 0
-      ? `有 ${failedPageCount} 页处理失败，可展开页面详情查看。`
+    : failedItemCount > 0
+      ? `有 ${failedItemCount} 个分析项失败，可展开页面详情查看。`
       : null;
   const isReanalyzing = reanalyzingDocumentId === doc.document_id;
   const isReanalyzingFailed = reanalyzingFailedDocumentId === doc.document_id;
   const isDeleting = deletingDocumentId === doc.document_id;
   const firstImagePage = pages.find((page) => Boolean(page.image_path));
   const generatedPageCount = pages.filter((page) => Boolean(page.image_path)).length;
+  const structuredPageCount = pages.filter((page) => page.status === "structured").length;
+  const visualModuleCount = pages.reduce(
+    (sum, page) => sum + countValue(page.visual_module_count),
+    0,
+  );
   const analyzablePageCount = pages.filter((page) => page.status === "rendered").length;
   const pageTotal = doc.page_count ?? pages.length;
   const fallbackThumbnailSrc = useMemo(
@@ -275,7 +291,9 @@ function DocumentRow({
         title={
           firstImagePage
             ? "查看此文档第一页图片"
-            : "页面图片生成后会出现在这里"
+            : structuredPageCount > 0
+              ? "结构化文档不生成整页预览"
+              : "此文档没有可用页面图片"
         }
       >
         {firstImagePage ? (
@@ -297,7 +315,7 @@ function DocumentRow({
         ) : (
           <span className="document-thumb-placeholder">
             <strong>{doc.file_type.toUpperCase()}</strong>
-            <small>暂无页面图片</small>
+            <small>{structuredPageCount > 0 ? "无整页预览" : "暂无页面图片"}</small>
           </span>
         )}
       </button>
@@ -325,11 +343,16 @@ function DocumentRow({
 
         <div className="document-asset-stats" aria-label="页面资产状态">
           <span>{pageTotal} 页</span>
-          <span>{generatedPageCount} 页已生成图片</span>
+          {structuredPageCount > 0 ? (
+            <span>{structuredPageCount} 页已结构化</span>
+          ) : (
+            <span>{generatedPageCount} 页已有图片</span>
+          )}
+          {visualModuleCount > 0 ? <span>{visualModuleCount} 个图片模块</span> : null}
           <span>{doc.analysis_succeeded_pages} 页已分析</span>
           {analyzablePageCount > 0 ? <span>{analyzablePageCount} 页可分析</span> : null}
-          {failedPageCount > 0 ? (
-            <span className="doc-summary-failed">{failedPageCount} 页失败</span>
+          {failedItemCount > 0 ? (
+            <span className="doc-summary-failed">{failedItemCount} 项失败</span>
           ) : null}
         </div>
 
@@ -380,7 +403,9 @@ function DocumentRow({
                         title={
                           page.image_path
                             ? "打开此页在 pages 目录中的图片"
-                            : "此页面图片不可用"
+                            : page.status === "structured"
+                              ? "此结构化页面无整页预览"
+                              : "此页面图片不可用"
                         }
                       >
                         查看图片
@@ -421,21 +446,23 @@ function DocumentRow({
             title={
               firstImagePage
                 ? "打开此文档 pages 目录中的第一张页面图片"
-                : "此文档还没有可查看的页面图片"
+                : structuredPageCount > 0
+                  ? "此结构化文档无整页预览"
+                  : "此文档还没有可查看的页面图片"
             }
           >
             查看页面
           </Button>
         ) : null}
-        {onReanalyzeFailedPages && failedPageCount > 0 ? (
+        {onReanalyzeFailedPages && failedItemCount > 0 ? (
           <Button
             variant="secondary"
             className="document-row-button"
             onClick={() => onReanalyzeFailedPages(doc.document_id)}
             disabled={isReanalyzingFailed}
-            title="重新分析此文档中的失败页面"
+            title="重新分析此文档中的失败页面或图片模块"
           >
-            {isReanalyzingFailed ? "重分析中" : "重试失败页"}
+            {isReanalyzingFailed ? "重分析中" : "重试失败项"}
           </Button>
         ) : null}
         {onReanalyzeDocument && doc.status === "ready" ? (
@@ -644,6 +671,8 @@ function pageActionLabel(status: string, isAnalyzing: boolean) {
 
 function pageStatusLabel(status: string) {
   switch (status) {
+    case "structured":
+      return "已结构化";
     case "rendered":
       return "已渲染";
     case "analysis_pending":
@@ -659,6 +688,7 @@ function pageStatusLabel(status: string) {
 
 function pageStatusTone(status: string) {
   switch (status) {
+    case "structured":
     case "rendered":
     case "analyzed":
       return "success";
@@ -669,6 +699,10 @@ function pageStatusTone(status: string) {
     default:
       return "neutral";
   }
+}
+
+function countValue(value: number | null | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
 function statusLabel(status: string) {

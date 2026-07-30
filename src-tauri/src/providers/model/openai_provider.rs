@@ -102,7 +102,9 @@ impl OpenAIProvider {
             .connect_timeout(CONNECT_TIMEOUT)
             .timeout(Duration::from_secs(30))
             .build()
-            .map_err(|_| provider_error("model_client_build_failed", true, "client_build_failed"))?;
+            .map_err(|_| {
+                provider_error("model_client_build_failed", true, "client_build_failed")
+            })?;
 
         let mut response = client
             .get(endpoint)
@@ -368,7 +370,14 @@ fn api_key_fingerprint(key: &str) -> String {
         return format!("len={}", chars.len());
     }
     let prefix: String = chars.iter().take(4).collect();
-    let suffix: String = chars.iter().rev().take(4).collect::<Vec<_>>().into_iter().rev().collect();
+    let suffix: String = chars
+        .iter()
+        .rev()
+        .take(4)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
     format!("len={}; prefix={prefix}; suffix={suffix}", chars.len())
 }
 
@@ -495,7 +504,8 @@ mod tests {
     #[test]
     fn custom_chat_endpoint_preserves_proxy_prefix_for_models_endpoint() {
         let mut settings = AppSettingsDto::default();
-        settings.custom_endpoint = "https://proxy.example.com/codex/v1/chat/completions".to_string();
+        settings.custom_endpoint =
+            "https://proxy.example.com/codex/v1/chat/completions".to_string();
 
         assert_eq!(
             OpenAIProvider::models_endpoint(&settings).expect("models endpoint"),
@@ -563,7 +573,10 @@ mod tests {
 
         assert_eq!(list.provider, "openai");
         assert_eq!(
-            list.models.iter().map(|model| model.id.as_str()).collect::<Vec<_>>(),
+            list.models
+                .iter()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
             vec!["gpt-4.1-mini", "gpt-5.5"]
         );
         assert_eq!(list.models[0].display_name.as_deref(), Some("GPT-4.1 Mini"));
@@ -571,7 +584,10 @@ mod tests {
 
     #[test]
     fn api_key_fingerprint_does_not_expose_full_secret() {
-        assert_eq!(api_key_fingerprint("sk-1234567890abcd"), "len=17; prefix=sk-1; suffix=abcd");
+        assert_eq!(
+            api_key_fingerprint("sk-1234567890abcd"),
+            "len=17; prefix=sk-1; suffix=abcd"
+        );
         assert_eq!(api_key_fingerprint("short"), "len=5");
     }
 

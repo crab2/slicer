@@ -29,6 +29,7 @@ interface ReanalysisSummary {
   analyzablePages: number;
   existingJsonPages: number;
   failedItems: number;
+  retryFailedOnly: boolean;
 }
 
 export function AnalysisPage({
@@ -172,12 +173,25 @@ export function AnalysisPage({
       if (navigationContext.selected_kind === "document" || navigationContext.selected_kind === "document_batch") {
         const results: AnalysisBatchResultDto[] = [];
         for (const documentId of navigationContext.selected_ids) {
-          results.push(await tauriClient.reanalyzeDocument(documentId));
+          results.push(
+            await (navigationContext.retry_failed_only
+              ? tauriClient.reanalyzeFailedPages(documentId)
+              : tauriClient.reanalyzeDocument(documentId)),
+          );
         }
-        setAnalysisReadyMessage(formatCombinedBatchMessage("默认重分析完成", results));
+        setAnalysisReadyMessage(
+          formatCombinedBatchMessage(
+            navigationContext.retry_failed_only ? "失败项重试完成" : "默认重分析完成",
+            results,
+          ),
+        );
       } else {
         const results: AnalysisResultDto[] = [];
         for (const pageId of navigationContext.selected_ids) {
+          const selectedPage = findWorkbenchPage(pageId, pagesByDocument);
+          if (selectedPage?.status === "structured") {
+            throw new Error("结构化 PDF 按图片模块分析，请从媒体管理选择整个文档重分析。");
+          }
           results.push(await tauriClient.analyzePage(pageId));
         }
         setAnalysisReadyMessage(formatPageAnalysisMessage("页面重分析完成", results));
@@ -230,15 +244,7 @@ export function AnalysisPage({
             <p className="eyebrow">页面分析</p>
             <h2>模型分析</h2>
             <p className="muted-copy">
-              配置模型后可批量分析新页面；待分析 {analysisStats.pendingPages} 页
-              {analysisStats.documentsWithPending > 0
-                ? `（${analysisStats.documentsWithPending} 个文档仍有待分析页面）`
-                : ""}
-              ，已分析 {analysisStats.analyzedPages} 页
-              {analysisStats.failedPages > 0
-                ? `，失败 ${analysisStats.failedPages} 页`
-                : ""}
-              。
+              {formatAnalysisOverview(analysisStats)}
               {!analysisConfigured && modelStatus?.configured
                 ? " 请先确认隐私提示。"
                 : ""}
@@ -282,15 +288,15 @@ export function AnalysisPage({
           <Button
             variant="primary"
             onClick={() => void handleAnalysisEntry()}
-            disabled={isModelStatusLoading || isBatchAnalyzing || !analysisConfigured}
+            disabled={isModelStatusLoading || isBatchAnalyzing || !modelStatus?.configured}
           >
             {!modelStatus?.configured
               ? "完成模型配置"
               : isBatchAnalyzing
-                ? "批量分析中..."
-                : analysisStats.pendingPages > 0
-                  ? `分析新页面（${analysisStats.pendingPages}）`
-                  : "分析新页面"}
+                ? "分析中..."
+                : analysisStats.pendingPages + analysisStats.pendingVisualModules > 0
+                  ? `分析新内容（${analysisStats.pendingPages + analysisStats.pendingVisualModules}）`
+                    : "分析新内容"}
           </Button>
           {!modelStatus?.configured ? (
             <Button onClick={onOpenSettings}>打开设置</Button>
@@ -301,7 +307,7 @@ export function AnalysisPage({
       {reanalysisSummary ? (
         <ReanalysisContextSummary
           summary={reanalysisSummary}
-          modelReady={Boolean(analysisConfigured)}
+          modelReady={Boolean(modelStatus?.configured)}
           isRunning={isReanalyzing}
           onDefaultReanalysis={() => void handleDefaultReanalysis()}
           onReturn={onReturnToSource}
@@ -377,7 +383,11 @@ function ReanalysisContextSummary({
           onClick={onDefaultReanalysis}
           disabled={!modelReady || isRunning || summary.analyzablePages === 0}
         >
-          {isRunning ? "重分析中..." : "默认重分析"}
+          {isRunning
+            ? "重分析中..."
+            : summary.retryFailedOnly
+              ? "重试失败项"
+              : "默认重分析"}
         </Button>
         <Button disabled title="后端自定义提示词重分析能力尚未接入">
           自定义提示词
@@ -416,10 +426,14 @@ function buildReanalysisSummary(
       const doc = documents.find((item) => item.document_id === documentId);
       const pages = pagesByDocument[documentId] ?? [];
       labels.push(doc?.original_filename ?? documentId);
-      analyzablePages += pages.filter((page) => canAnalyzePage(page)).length;
+      analyzablePages += pages.filter((page) => canAnalyzePage(page) || hasVisualModules(page)).length;
       existingJsonPages += pages.filter((page) => page.analysis_summary !== null).length;
       failedItems += doc?.status === "failed" ? 1 : 0;
       failedItems += pages.filter((page) => page.status === "failed").length;
+      failedItems += pages.reduce(
+        (sum, page) => sum + countValue(page.failed_visual_module_count),
+        0,
+      );
     }
   } else {
     const pageMap = new Map<string, { page: PageWorkbenchDto; doc?: DocumentDto }>();
@@ -455,6 +469,7 @@ function buildReanalysisSummary(
     analyzablePages,
     existingJsonPages,
     failedItems,
+    retryFailedOnly: context.retry_failed_only,
   };
 }
 
@@ -463,6 +478,21 @@ function canAnalyzePage(page: PageWorkbenchDto) {
     Boolean(page.image_path) &&
     (page.status === "rendered" || page.status === "failed" || page.status === "analyzed")
   );
+}
+
+function hasVisualModules(page: PageWorkbenchDto) {
+  return countValue(page.visual_module_count) > 0;
+}
+
+function findWorkbenchPage(
+  pageId: string,
+  pagesByDocument: Record<string, PageWorkbenchDto[]>,
+) {
+  for (const pages of Object.values(pagesByDocument)) {
+    const page = pages.find((item) => item.page_id === pageId);
+    if (page) return page;
+  }
+  return undefined;
 }
 
 function selectedKindLabel(kind: NavigationContext["selected_kind"]) {
@@ -490,7 +520,7 @@ function formatMissingFields(missing: string[]): string {
   return missing.map((key) => labels[key] ?? key).join("、") || "模型配置";
 }
 
-function computeAnalysisStats(
+export function computeAnalysisStats(
   documents: DocumentDto[],
   pagesByDocument: Record<string, PageWorkbenchDto[]>,
 ) {
@@ -498,12 +528,26 @@ function computeAnalysisStats(
   let analyzedPages = 0;
   let failedPages = 0;
   let documentsWithPending = 0;
+  let totalVisualModules = 0;
+  let pendingVisualModules = 0;
+  let succeededVisualModules = 0;
+  let failedVisualModules = 0;
+  let documentsWithPendingVisualModules = 0;
+  const allPages: PageWorkbenchDto[] = [];
 
   for (const doc of documents) {
     const pages = pagesByDocument[doc.document_id] ?? [];
+    allPages.push(...pages);
     let docPending = 0;
+    let docPendingVisualModules = 0;
     for (const page of pages) {
-      if (page.status === "rendered") {
+      if (hasVisualModuleCounts(page)) {
+        totalVisualModules += countValue(page.visual_module_count);
+        pendingVisualModules += countValue(page.pending_visual_module_count);
+        succeededVisualModules += countValue(page.succeeded_visual_module_count);
+        failedVisualModules += countValue(page.failed_visual_module_count);
+        docPendingVisualModules += countValue(page.pending_visual_module_count);
+      } else if (page.status === "rendered") {
         pendingPages += 1;
         docPending += 1;
       } else if (page.status === "analyzed") {
@@ -515,26 +559,128 @@ function computeAnalysisStats(
     if (docPending > 0) {
       documentsWithPending += 1;
     }
+    if (docPendingVisualModules > 0) {
+      documentsWithPendingVisualModules += 1;
+    }
   }
 
-  return { pendingPages, analyzedPages, failedPages, documentsWithPending };
+  const hasLegacyPageStats = allPages.some(
+    (page) => !hasVisualModuleCounts(page),
+  );
+  const hasVisualModuleStats = allPages.some(hasVisualModuleCounts);
+
+  return {
+    pendingPages,
+    analyzedPages,
+    failedPages,
+    documentsWithPending,
+    totalVisualModules,
+    pendingVisualModules,
+    succeededVisualModules,
+    failedVisualModules,
+    documentsWithPendingVisualModules,
+    hasLegacyPageStats,
+    hasVisualModuleStats,
+  };
 }
 
-function formatBatchMessage(prefix: string, result: AnalysisBatchResultDto) {
-  return `${prefix}：共 ${result.total_pages} 页，成功 ${result.succeeded_pages} 页，失败 ${result.failed_pages} 页，跳过 ${result.skipped_pages} 页。`;
+function hasVisualModuleCounts(page: PageWorkbenchDto): boolean {
+  return [
+    page.visual_module_count,
+    page.pending_visual_module_count,
+    page.succeeded_visual_module_count,
+    page.failed_visual_module_count,
+  ].every((value) => typeof value === "number" && Number.isFinite(value));
 }
 
-function formatCombinedBatchMessage(prefix: string, results: AnalysisBatchResultDto[]) {
+function countValue(value: number | undefined): number {
+  return typeof value === "number" && Number.isFinite(value)
+    ? Math.max(0, value)
+    : 0;
+}
+
+export function formatAnalysisOverview(
+  stats: ReturnType<typeof computeAnalysisStats>,
+): string {
+  const pageSummary = () => {
+    const pendingDocuments =
+      stats.documentsWithPending > 0
+        ? `（${stats.documentsWithPending} 个文档仍有待分析页面）`
+        : "";
+    const failed = stats.failedPages > 0 ? `，失败 ${stats.failedPages} 页` : "";
+    return `配置模型后可批量分析新页面；待分析 ${stats.pendingPages} 页${pendingDocuments}，已分析 ${stats.analyzedPages} 页${failed}。`;
+  };
+
+  const visualSummary = () => {
+    const pendingDocuments =
+      stats.documentsWithPendingVisualModules > 0
+        ? `（${stats.documentsWithPendingVisualModules} 个文档仍有待分析模块）`
+        : "";
+    const failed =
+      stats.failedVisualModules > 0
+        ? `，失败 ${stats.failedVisualModules} 个`
+        : "";
+    return `视觉模块共 ${stats.totalVisualModules} 个，待分析 ${stats.pendingVisualModules} 个${pendingDocuments}，已完成 ${stats.succeededVisualModules} 个${failed}。`;
+  };
+
+  if (stats.hasLegacyPageStats && stats.hasVisualModuleStats) {
+    return `${pageSummary()} ${visualSummary()}`;
+  }
+  return stats.hasVisualModuleStats ? visualSummary() : pageSummary();
+}
+
+export function formatBatchMessage(
+  prefix: string,
+  result: AnalysisBatchResultDto,
+) {
+  const summaries: string[] = [];
+  if (result.total_pages > 0) {
+    summaries.push(
+      `页面共 ${result.total_pages} 页，成功 ${result.succeeded_pages} 页，失败 ${result.failed_pages} 页，跳过 ${result.skipped_pages} 页`,
+    );
+  }
+  if (result.total_visual_modules > 0) {
+    summaries.push(
+      `视觉模块共 ${result.total_visual_modules} 个，成功 ${result.succeeded_visual_modules} 个，失败 ${result.failed_visual_modules} 个，跳过 ${result.skipped_visual_modules} 个`,
+    );
+  }
+  return `${prefix}：${summaries.join("；") || "没有需要处理的内容"}。`;
+}
+
+export function formatCombinedBatchMessage(prefix: string, results: AnalysisBatchResultDto[]) {
   const totals = results.reduce(
     (sum, result) => ({
       total_pages: sum.total_pages + result.total_pages,
       succeeded_pages: sum.succeeded_pages + result.succeeded_pages,
       failed_pages: sum.failed_pages + result.failed_pages,
       skipped_pages: sum.skipped_pages + result.skipped_pages,
+      total_visual_modules: sum.total_visual_modules + result.total_visual_modules,
+      succeeded_visual_modules:
+        sum.succeeded_visual_modules + result.succeeded_visual_modules,
+      failed_visual_modules:
+        sum.failed_visual_modules + result.failed_visual_modules,
+      skipped_visual_modules:
+        sum.skipped_visual_modules + result.skipped_visual_modules,
     }),
-    { total_pages: 0, succeeded_pages: 0, failed_pages: 0, skipped_pages: 0 },
+    {
+      total_pages: 0,
+      succeeded_pages: 0,
+      failed_pages: 0,
+      skipped_pages: 0,
+      total_visual_modules: 0,
+      succeeded_visual_modules: 0,
+      failed_visual_modules: 0,
+      skipped_visual_modules: 0,
+    },
   );
-  return `${prefix}：共 ${totals.total_pages} 页，成功 ${totals.succeeded_pages} 页，失败 ${totals.failed_pages} 页，跳过 ${totals.skipped_pages} 页。`;
+  return formatBatchMessage(prefix, {
+    job_id: "combined",
+    ...totals,
+    status: results.some((result) => result.status.includes("failed"))
+      ? "succeeded_with_failures"
+      : "succeeded",
+    updated_at: results[results.length - 1]?.updated_at ?? "",
+  });
 }
 
 function formatPageAnalysisMessage(prefix: string, results: AnalysisResultDto[]) {

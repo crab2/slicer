@@ -103,13 +103,21 @@ pub struct PageWorkbenchDto {
     pub page_id: String,
     pub document_id: String,
     pub page_number: i64,
-    pub image_hash: String,
+    pub image_hash: Option<String>,
     pub image_path: Option<String>,
     pub status: String,
     pub error_summary: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     pub analysis_summary: Option<PageAnalysisSummaryDto>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub visual_module_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_visual_module_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub succeeded_visual_module_count: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub failed_visual_module_count: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq)]
@@ -119,6 +127,10 @@ pub struct AnalysisBatchResultDto {
     pub succeeded_pages: i64,
     pub failed_pages: i64,
     pub skipped_pages: i64,
+    pub total_visual_modules: i64,
+    pub succeeded_visual_modules: i64,
+    pub failed_visual_modules: i64,
+    pub skipped_visual_modules: i64,
     pub status: String,
     pub updated_at: String,
 }

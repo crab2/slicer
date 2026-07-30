@@ -159,7 +159,7 @@ export interface PageRecordDto {
   page_id: string;
   document_id: string;
   page_number: number;
-  image_hash: string;
+  image_hash: string | null;
   status: string;
   error_summary: string | null;
   created_at: string;
@@ -178,13 +178,17 @@ export interface PageWorkbenchDto {
   page_id: string;
   document_id: string;
   page_number: number;
-  image_hash: string;
+  image_hash: string | null;
   image_path: string | null;
   status: string;
   error_summary: string | null;
   created_at: string;
   updated_at: string;
   analysis_summary: PageAnalysisSummaryDto | null;
+  visual_module_count?: number;
+  pending_visual_module_count?: number;
+  succeeded_visual_module_count?: number;
+  failed_visual_module_count?: number;
 }
 
 export interface AnalysisResultDto {
@@ -206,6 +210,10 @@ export interface AnalysisBatchResultDto {
   succeeded_pages: number;
   failed_pages: number;
   skipped_pages: number;
+  total_visual_modules: number;
+  succeeded_visual_modules: number;
+  failed_visual_modules: number;
+  skipped_visual_modules: number;
   status: string;
   updated_at: string;
 }
@@ -242,7 +250,36 @@ export interface IndexRebuildStartDto {
   version_id: string;
 }
 
+export type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
+
+export interface NormalizedBoundingBoxDto {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface SearchHitPageDto {
+  page_id: string;
+  document_id: string;
+  page_number: number;
+}
+
 export interface SearchResultItemDto {
+  hit_id: string;
+  module_id: string | null;
+  type: string;
+  module_type?: string | null;
+  snippet: string;
+  page: SearchHitPageDto;
+  bbox: NormalizedBoundingBoxDto | null;
+  module_json: JsonValue;
   page_id: string;
   document_id: string;
   page_number: number;

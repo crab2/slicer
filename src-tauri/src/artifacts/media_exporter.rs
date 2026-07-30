@@ -60,7 +60,10 @@ struct PageAnalysis {
 pub struct MediaExporter;
 
 impl MediaExporter {
-    pub fn export(workspace: &WorkspaceService, destination: &Path) -> AppResult<MediaExportResult> {
+    pub fn export(
+        workspace: &WorkspaceService,
+        destination: &Path,
+    ) -> AppResult<MediaExportResult> {
         let layout = workspace.workspace_layout()?;
         let mut conn = workspace.get_db_connection()?;
 
@@ -80,6 +83,9 @@ impl MediaExporter {
             let pages = DocumentRepository::list_pages_by_document(&mut conn, &doc.document_id)?;
             let mut analyses = Vec::new();
             for page in &pages {
+                if page.image_hash.is_none() {
+                    continue;
+                }
                 if let Some(analysis) =
                     AnalysisRepository::find_succeeded_page_analysis(&mut conn, &page.page_id)?
                 {
@@ -113,9 +119,8 @@ impl MediaExporter {
 
         let wiki_path = markdown_filename.clone();
         let media_export_dir = destination.join("media-export");
-        fs::create_dir_all(&media_export_dir).map_err(|e| {
-            AppError::io("export", "export_dir_create_failed", e)
-        })?;
+        fs::create_dir_all(&media_export_dir)
+            .map_err(|e| AppError::io("export", "export_dir_create_failed", e))?;
 
         // Build markdown and collect media entries
         let mut markdown_content = String::new();
@@ -128,6 +133,9 @@ impl MediaExporter {
             markdown_content.push_str(&format!("# {doc_name}\n\n"));
 
             for pa in analyses {
+                let Some(hash) = pa.page.image_hash.as_deref() else {
+                    continue;
+                };
                 let default_heading = format!("第 {} 页", pa.page.page_number);
                 let heading = pa
                     .analysis
@@ -144,11 +152,9 @@ impl MediaExporter {
                     }
                 }
 
-                markdown_content
-                    .push_str(&format!("![[MEDIA:{}]]\n\n", pa.page.image_hash));
+                markdown_content.push_str(&format!("![[MEDIA:{hash}]]\n\n"));
 
                 // Build media manifest entry
-                let hash = &pa.page.image_hash;
                 if !items.contains_key(hash) {
                     let source_path = layout.root().join(&pa.analysis.image_path);
                     let ext = extension_from_path(&pa.analysis.image_path);
@@ -156,9 +162,8 @@ impl MediaExporter {
                     let dest_path = media_export_dir.join(&rel_storage);
 
                     // Read and hash the file
-                    let file_bytes = fs::read(&source_path).map_err(|e| {
-                        AppError::io("export", "export_image_read_failed", e)
-                    })?;
+                    let file_bytes = fs::read(&source_path)
+                        .map_err(|e| AppError::io("export", "export_image_read_failed", e))?;
                     let sha256 = compute_sha256(&file_bytes);
                     let file_size = file_bytes.len() as u64;
                     let mime = mime_from_extension(ext);
@@ -170,19 +175,18 @@ impl MediaExporter {
                                 AppError::io("export", "export_image_copy_failed", e)
                             })?;
                         }
-                        fs::copy(&source_path, &dest_path).map_err(|e| {
-                            AppError::io("export", "export_image_copy_failed", e)
-                        })?;
-                        copied_hashes.insert(hash.clone());
+                        fs::copy(&source_path, &dest_path)
+                            .map_err(|e| AppError::io("export", "export_image_copy_failed", e))?;
+                        copied_hashes.insert(hash.to_string());
                     }
 
                     let created_at_str = chrono::Utc::now().to_rfc3339();
 
                     items.insert(
-                        hash.clone(),
+                        hash.to_string(),
                         MediaExportItem {
                             manifest: MediaExportManifestEntry {
-                                code: hash.clone(),
+                                code: hash.to_string(),
                                 sha256,
                                 mime: mime.to_string(),
                                 size: file_size,
@@ -194,7 +198,7 @@ impl MediaExporter {
                             backrefs: Vec::new(),
                         },
                     );
-                    codes_order.push(hash.clone());
+                    codes_order.push(hash.to_string());
                 }
 
                 // Add backref

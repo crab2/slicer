@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { EmptyState } from "../components/common/EmptyState";
 import { ErrorMessage } from "../components/common/ErrorMessage";
 import { StatusBadge } from "../components/common/StatusBadge";
 import { AnalysisPage } from "../features/analysis/AnalysisPage";
@@ -211,10 +210,6 @@ export function AppShell() {
           ) : null}
         </section>
 
-        <EmptyState
-          title="加载中状态预留"
-          description="后续任务编排、索引重建和模型分析会在这里接入统一的加载与失败状态。"
-        />
       </main>
     </div>
   );

@@ -4,6 +4,7 @@ use serde::Serialize;
 pub enum PageLifecycleStatus {
     Pending,
     Rendered,
+    Structured,
     AnalysisPending,
     Analyzed,
     Failed,
@@ -14,6 +15,7 @@ impl PageLifecycleStatus {
         match self {
             Self::Pending => "pending",
             Self::Rendered => "rendered",
+            Self::Structured => "structured",
             Self::AnalysisPending => "analysis_pending",
             Self::Analyzed => "analyzed",
             Self::Failed => "failed",
@@ -25,6 +27,7 @@ pub fn page_lifecycle_statuses() -> Vec<String> {
     [
         PageLifecycleStatus::Pending,
         PageLifecycleStatus::Rendered,
+        PageLifecycleStatus::Structured,
         PageLifecycleStatus::AnalysisPending,
         PageLifecycleStatus::Analyzed,
         PageLifecycleStatus::Failed,
@@ -39,7 +42,7 @@ pub struct PageRecordDto {
     pub page_id: String,
     pub document_id: String,
     pub page_number: i64,
-    pub image_hash: String,
+    pub image_hash: Option<String>,
     pub status: String,
     pub error_summary: Option<String>,
     pub created_at: String,

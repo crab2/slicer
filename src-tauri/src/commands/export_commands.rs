@@ -1,4 +1,4 @@
-use crate::artifacts::media_exporter::{MediaExporter, MediaExportResult};
+use crate::artifacts::media_exporter::{MediaExportResult, MediaExporter};
 use crate::errors::AppError;
 use crate::services::workspace_service::WorkspaceService;
 use std::path::PathBuf;

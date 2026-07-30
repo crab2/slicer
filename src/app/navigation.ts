@@ -21,6 +21,7 @@ export type ReanalysisSelectedKind =
 
 export interface ReanalysisNavigationContext {
   action: "reanalyze";
+  retry_failed_only: boolean;
   source_tab: ViewId;
   return_to: ViewId;
   selected_kind: ReanalysisSelectedKind;

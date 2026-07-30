@@ -11,8 +11,8 @@ pub struct PageBaselineJsonl {
     pub page_id: String,
     pub document_id: String,
     pub page_number: i64,
-    pub image_hash: String,
-    pub image_path: String,
+    pub image_hash: Option<String>,
+    pub image_path: Option<String>,
     pub status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error_summary: Option<String>,
@@ -35,11 +35,15 @@ impl PageJsonExporter {
         let mut lines = Vec::with_capacity(pages.len());
 
         for page in pages {
-            let image_path = DocumentRepository::find_image_asset_by_hash(conn, &page.image_hash)?
-                .map(|asset| asset.file_path)
-                .unwrap_or_default();
+            let image_path = match page.image_hash.as_deref() {
+                Some(image_hash) => DocumentRepository::find_image_asset_by_hash(conn, image_hash)?
+                    .map(|asset| asset.file_path),
+                None => None,
+            };
 
-            if let Some(analysis_line) = Self::analysis_line_for_page(conn, &page, &image_path)? {
+            if let Some(analysis_line) =
+                Self::analysis_line_for_page(conn, &page, image_path.as_deref())?
+            {
                 lines.push(analysis_line);
             } else {
                 lines.push(PageJsonlLine::Baseline(PageBaselineJsonl {
@@ -86,8 +90,10 @@ impl PageJsonExporter {
                     false,
                 )
             })?;
-        if let Some(asset) = DocumentRepository::find_image_asset_by_hash(conn, &page.image_hash)? {
-            analysis.image_path = asset.file_path;
+        if let Some(image_hash) = page.image_hash.as_deref() {
+            if let Some(asset) = DocumentRepository::find_image_asset_by_hash(conn, image_hash)? {
+                analysis.image_path = asset.file_path;
+            }
         }
         Ok(())
     }
@@ -95,7 +101,7 @@ impl PageJsonExporter {
     fn analysis_line_for_page(
         conn: &mut SqliteConnection,
         page: &PageRecordDto,
-        image_path: &str,
+        image_path: Option<&str>,
     ) -> AppResult<Option<PageJsonlLine>> {
         let Some(mut analysis) =
             AnalysisRepository::find_succeeded_page_analysis(conn, &page.page_id)?
@@ -116,7 +122,7 @@ impl PageJsonExporter {
             )));
         }
 
-        if !image_path.is_empty() {
+        if let Some(image_path) = image_path.filter(|path| !path.is_empty()) {
             analysis.image_path = image_path.to_string();
         } else {
             Self::sync_analysis_image_path(conn, &mut analysis)?;
@@ -214,7 +220,7 @@ mod tests {
         assert_eq!(lines.len(), 1);
         match &lines[0] {
             PageJsonlLine::Baseline(baseline) => {
-                assert_eq!(baseline.image_path, "pages/doc/image.png");
+                assert_eq!(baseline.image_path.as_deref(), Some("pages/doc/image.png"));
                 assert_eq!(baseline.status, "rendered");
             }
             PageJsonlLine::Analysis(_) => panic!("expected baseline"),

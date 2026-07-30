@@ -7,6 +7,7 @@ import { tauriClient } from "../../lib/tauriClient";
 import type { DocumentDto, JobDto, PageWorkbenchDto, WorkspaceStatusDto } from "../../types/app";
 import type { NavigationContext, ReanalysisNavigationContext, ViewId } from "../../app/navigation";
 import {
+  getDocumentReanalysisValidation,
   MediaAssetList,
   type MediaAssetSelection,
   type MediaStatusFilter,
@@ -146,7 +147,7 @@ export function MediaManagementPage({
   async function handleOpenDocumentImage(page: PageWorkbenchDto) {
     const imagePath = resolveWorkspacePath(page.image_path, workspaceStatus.workspace_path);
     if (!imagePath) {
-      setError({ message: "页面图片不可用，可能尚未生成或路径无效。" });
+      setError({ message: "此页面没有可用的整页预览。" });
       return;
     }
 
@@ -180,6 +181,7 @@ export function MediaManagementPage({
 
     const context: ReanalysisNavigationContext = {
       action: "reanalyze",
+      retry_failed_only: Boolean(selection.retryFailedOnly),
       source_tab: "mediaManagement",
       return_to: "mediaManagement",
       selected_kind:
@@ -206,7 +208,7 @@ export function MediaManagementPage({
         return false;
       }
       const pages = pagesByDocument[id] ?? [];
-      return doc.status !== "failed" && pages.some((page) => page.image_path);
+      return !getDocumentReanalysisValidation(doc, pages).disabledReason;
     });
     if (ids.length === 0) {
       setError({ message: "当前选择中没有可重分析的媒体。" });

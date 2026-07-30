@@ -1,126 +1,131 @@
+use crate::domain::pdf_structure::PdfPageGeometry;
 use crate::errors::{AppError, AppResult};
-use image::ImageFormat;
 use pdfium_render::prelude::*;
-use std::io::Cursor;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
 
-pub struct RenderedPage {
+pub const MAX_PDF_PAGE_COUNT: usize = 10_000;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PdfPageMetadata {
     pub page_number: i64,
-    pub png_bytes: Vec<u8>,
-    pub image_hash: String,
+    pub geometry: PdfPageGeometry,
 }
 
 pub trait PdfRenderer: Send + Sync {
-    fn render_pdf(&self, pdf_path: &Path, dpi: f32) -> AppResult<Vec<RenderedPage>>;
-    fn page_count(&self, pdf_path: &Path) -> AppResult<i64>;
+    fn inspect_pdf(&self, pdf_path: &Path) -> AppResult<Vec<PdfPageMetadata>>;
 }
 
 pub struct PdfiumRenderer;
 
 impl PdfRenderer for PdfiumRenderer {
-    fn render_pdf(&self, pdf_path: &Path, _dpi: f32) -> AppResult<Vec<RenderedPage>> {
+    fn inspect_pdf(&self, pdf_path: &Path) -> AppResult<Vec<PdfPageMetadata>> {
         let pdfium = load_pdfium()?;
         let document = pdfium.load_pdf_from_file(pdf_path, None).map_err(|e| {
             AppError::new(
                 "pdf_load_failed",
                 "无法加载 PDF 文件，文件可能已损坏或加密。",
-                "pdf_render",
+                "pdf_metadata",
                 true,
             )
             .with_details(format!("{e}"))
         })?;
 
-        let mut pages = Vec::new();
         let page_count = document.pages().len();
+        validate_pdf_page_count(usize::from(page_count))?;
+
+        let mut pages = Vec::with_capacity(usize::from(page_count));
 
         for i in 0..page_count {
             let page = document.pages().get(i).map_err(|e| {
                 AppError::new(
-                    "pdf_page_render_failed",
-                    "PDF 页面渲染失败。",
-                    "pdf_render",
+                    "pdf_page_metadata_failed",
+                    "PDF 页面元数据读取失败。",
+                    "pdf_metadata",
                     true,
                 )
                 .with_details(format!("{e}"))
             })?;
 
-            let bitmap = page
-                .render_with_config(
-                    &PdfRenderConfig::new()
-                        .set_target_width(2000)
-                        .set_maximum_height(2000),
-                )
-                .map_err(|e| {
-                    AppError::new(
-                        "pdf_page_render_failed",
-                        "PDF 页面渲染失败。",
-                        "pdf_render",
-                        true,
-                    )
-                    .with_details(format!("{e}"))
-                })?;
-
-            let rgba_bytes = bitmap.as_rgba_bytes();
-            let width = bitmap.width() as u32;
-            let height = bitmap.height() as u32;
-
-            let img = image::RgbaImage::from_raw(width, height, rgba_bytes.to_vec()).ok_or_else(
-                || {
-                    AppError::new(
-                        "pdf_image_conversion_failed",
-                        "PDF 页面图像转换失败。",
-                        "pdf_render",
-                        false,
-                    )
-                },
-            )?;
-
-            let mut png_buf = Vec::new();
-            let mut cursor = Cursor::new(&mut png_buf);
-            img.write_to(&mut cursor, ImageFormat::Png).map_err(|e| {
+            let page_width_points = f64::from(page.width().value);
+            let page_height_points = f64::from(page.height().value);
+            let crop = page
+                .boundaries()
+                .crop()
+                .or_else(|_| page.boundaries().media())
+                .map(|boundary| boundary.bounds)
+                .unwrap_or_else(|_| page.page_size());
+            let rotation_degrees = page.rotation().map_err(|e| {
                 AppError::new(
-                    "pdf_png_encode_failed",
-                    "PNG 编码失败。",
-                    "pdf_render",
+                    "pdf_page_geometry_failed",
+                    "无法读取 PDF 页面旋转信息。",
+                    "pdf_metadata",
                     false,
                 )
-                .with_details(e.to_string())
-            })?;
-
-            let image_hash = compute_image_hash(&png_buf);
-
-            pages.push(RenderedPage {
+                .with_details(format!("{e}"))
+            })? as i64;
+            let rotation_degrees = match rotation_degrees {
+                0 => 0,
+                1 => 90,
+                2 => 180,
+                3 => 270,
+                _ => 0,
+            };
+            let geometry = PdfPageGeometry {
+                width_points: page_width_points,
+                height_points: page_height_points,
+                crop_left_points: f64::from(crop.left().value),
+                crop_bottom_points: f64::from(crop.bottom().value),
+                crop_right_points: f64::from(crop.right().value),
+                crop_top_points: f64::from(crop.top().value),
+                rotation_degrees,
+            };
+            if !geometry.is_valid() {
+                return Err(AppError::new(
+                    "pdf_page_geometry_invalid",
+                    "PDF 页面尺寸或 CropBox 无效。",
+                    "pdf_metadata",
+                    false,
+                ));
+            }
+            pages.push(PdfPageMetadata {
                 page_number: i as i64 + 1,
-                png_bytes: png_buf,
-                image_hash,
+                geometry,
             });
         }
 
         Ok(pages)
     }
+}
 
-    fn page_count(&self, pdf_path: &Path) -> AppResult<i64> {
-        let pdfium = load_pdfium()?;
-        let document = pdfium.load_pdf_from_file(pdf_path, None).map_err(|e| {
-            AppError::new(
-                "pdf_load_failed",
-                "无法加载 PDF 文件，文件可能已损坏或加密。",
-                "pdf_render",
-                true,
-            )
-            .with_details(format!("{e}"))
-        })?;
-
-        Ok(document.pages().len() as i64)
+fn validate_pdf_page_count(page_count: usize) -> AppResult<()> {
+    if page_count == 0 {
+        return Err(AppError::new(
+            "pdf_empty_document",
+            "PDF 文件没有页面。",
+            "pdf_metadata",
+            false,
+        ));
     }
+    if page_count > MAX_PDF_PAGE_COUNT {
+        return Err(AppError::new(
+            "pdf_page_count_limit_exceeded",
+            format!("PDF 页数超过安全上限 {MAX_PDF_PAGE_COUNT}。"),
+            "pdf_metadata",
+            false,
+        )
+        .with_details(format!("page_count={page_count}")));
+    }
+    Ok(())
 }
 
 fn load_pdfium() -> AppResult<Pdfium> {
     pdfium_auto::bind_pdfium_silent().map_err(|e| {
         AppError::new(
             "pdfium_unavailable",
-            "PDF 渲染库不可用，无法自动获取或加载 pdfium。",
-            "pdf_render",
+            "PDF 元数据读取库不可用，无法自动获取或加载 pdfium。",
+            "pdf_metadata",
             true,
         )
         .with_details(format!("{e}"))
@@ -148,12 +153,22 @@ pub fn sanitize_filename(name: &str) -> String {
 /// Compute SHA-256 hash of a file.
 pub fn compute_file_hash(path: &Path) -> AppResult<String> {
     use sha2::{Digest, Sha256};
-    let data = std::fs::read(path).map_err(|e| {
+    let mut file = File::open(path).map_err(|e| {
         AppError::new("file_read_failed", "无法读取文件。", "import", true)
             .with_details(e.to_string())
     })?;
     let mut hasher = Sha256::new();
-    hasher.update(&data);
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let read = file.read(&mut buffer).map_err(|e| {
+            AppError::new("file_read_failed", "无法读取文件。", "import", true)
+                .with_details(e.to_string())
+        })?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buffer[..read]);
+    }
     Ok(hex::encode(hasher.finalize()))
 }
 
@@ -161,5 +176,25 @@ pub fn compute_file_hash(path: &Path) -> AppResult<String> {
 mod hex {
     pub fn encode(bytes: impl AsRef<[u8]>) -> String {
         bytes.as_ref().iter().map(|b| format!("{b:02x}")).collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{validate_pdf_page_count, MAX_PDF_PAGE_COUNT};
+
+    #[test]
+    fn rejects_empty_and_oversized_pdf_page_counts() {
+        assert_eq!(
+            validate_pdf_page_count(0).expect_err("empty PDF").code,
+            "pdf_empty_document"
+        );
+        validate_pdf_page_count(MAX_PDF_PAGE_COUNT).expect("maximum accepted");
+        assert_eq!(
+            validate_pdf_page_count(MAX_PDF_PAGE_COUNT + 1)
+                .expect_err("oversized PDF")
+                .code,
+            "pdf_page_count_limit_exceeded"
+        );
     }
 }
