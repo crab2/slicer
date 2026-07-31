@@ -2,7 +2,7 @@
 title: '补齐分析失败原因与失败项重试'
 type: 'bugfix'
 created: '2026-07-31'
-status: 'in-review'
+status: 'done'
 review_loop_iteration: 0
 baseline_commit: '37ae02d15af04799f82a9a6e6cb1faa31e4d04bb'
 context:
@@ -42,6 +42,7 @@ context:
 
 - `src-tauri/src/domain/analysis.rs` -- `PageWorkbenchDto` 的失败诊断契约。
 - `src-tauri/src/repositories/analysis_repository.rs` -- 从 current page result 或失败视觉模块关联的 `errors` 读取最新代表性错误。
+- `src-tauri/src/errors.rs` -- 阻断持久化 provider response preview 到达 UI。
 - `src/types/app.ts` -- Rust DTO 对应的前端类型。
 - `src/features/analysis/AnalysisPage.tsx` -- 失败项派生、持久展示、按文档重试和刷新反馈。
 - `src/features/analysis/AnalysisPage.test.ts` -- 失败分组、原因降级和统计回归测试。
@@ -50,7 +51,7 @@ context:
 ## Tasks & Acceptance
 
 **Execution:**
-- [x] `src-tauri/src/domain/analysis.rs`, `src-tauri/src/repositories/analysis_repository.rs` -- 为工作台页面附加可选 `AppError`，按更新时间读取普通页或视觉模块的最新失败，并覆盖查询测试。
+- [x] `src-tauri/src/domain/analysis.rs`, `src-tauri/src/repositories/analysis_repository.rs`, `src-tauri/src/errors.rs` -- 为工作台页面附加可选 `AppError`，批量读取普通页或视觉模块的稳定代表性失败，在 DTO 边界再次脱敏，并覆盖查询测试。
 - [x] `src/types/app.ts`, `src/features/analysis/AnalysisPage.tsx` -- 建立按文档分组的失败视图，展示原因/详情/诊断号，并调用现有 `reanalyzeFailedPages` 后刷新账本状态。
 - [x] `src/features/analysis/AnalysisPage.test.ts`, `src/styles/globals.css` -- 覆盖普通页、视觉模块、缺失错误和多文档分组，补齐桌面与窄窗口布局。
 
@@ -66,8 +67,47 @@ context:
 
 **Commands:**
 - `cargo test --manifest-path .\src-tauri\Cargo.toml --lib analysis_repository` -- 工作台查询返回正确且安全的代表性错误。
+- `cargo test --manifest-path .\src-tauri\Cargo.toml --lib redact_secrets` -- provider response preview 不可到达 UI。
 - `cargo test --manifest-path .\src-tauri\Cargo.toml --lib analysis_service` -- 现有普通页/视觉模块失败重试语义不回归。
 - `npm run test:frontend -- AnalysisPage.test.ts` -- 失败清单派生、降级原因和批次反馈通过。
 - `npm run build` -- TypeScript 与生产构建通过。
 - `cargo fmt --manifest-path .\src-tauri\Cargo.toml --check` -- Rust 格式通过。
 - `git diff --check` -- 无空白错误。
+
+## Suggested Review Order
+
+**失败诊断链路**
+
+- 批量汇聚权威失败
+  [`analysis_repository.rs:127`](../../src-tauri/src/repositories/analysis_repository.rs#L127)
+
+- 阻断响应预览泄漏
+  [`errors.rs:179`](../../src-tauri/src/errors.rs#L179)
+
+- 对齐跨端失败契约
+  [`analysis.rs:115`](../../src-tauri/src/domain/analysis.rs#L115)
+
+**失败恢复交互**
+
+- 保留刷新失败上下文
+  [`AnalysisPage.tsx:113`](../../src/features/analysis/AnalysisPage.tsx#L113)
+
+- 复用文档失败重试
+  [`AnalysisPage.tsx:269`](../../src/features/analysis/AnalysisPage.tsx#L269)
+
+- 常驻呈现恢复动作
+  [`AnalysisPage.tsx:454`](../../src/features/analysis/AnalysisPage.tsx#L454)
+
+- 统一普通页与模块
+  [`AnalysisPage.tsx:726`](../../src/features/analysis/AnalysisPage.tsx#L726)
+
+**样式与回归**
+
+- 稳定失败列表布局
+  [`globals.css:618`](../../src/styles/globals.css#L618)
+
+- 覆盖前端分组降级
+  [`AnalysisPage.test.ts:56`](../../src/features/analysis/AnalysisPage.test.ts#L56)
+
+- 覆盖账本诊断边界
+  [`analysis_repository.rs:626`](../../src-tauri/src/repositories/analysis_repository.rs#L626)

@@ -220,9 +220,7 @@ impl AnalysisRepository {
             image_hash: page.image_hash,
             image_path,
             status: page.status,
-            error_summary: page
-                .error_summary
-                .map(|summary| redact_secrets(&summary)),
+            error_summary: page.error_summary.map(|summary| redact_secrets(&summary)),
             created_at: page.created_at,
             updated_at: page.updated_at,
             analysis_summary,
@@ -649,11 +647,7 @@ mod tests {
             .execute(&mut conn)
             .await
             .map_err(|err| {
-                crate::repositories::db::database_error(
-                    "test",
-                    "response_preview_seed_failed",
-                    err,
-                )
+                crate::repositories::db::database_error("test", "response_preview_seed_failed", err)
             })?;
             Ok(())
         })

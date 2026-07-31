@@ -498,30 +498,31 @@ function AnalysisFailurePanel({
               </div>
 
               <ul className="analysis-failure-items">
-                {group.items.map((item) => (
-                  <li className="analysis-failure-item" key={item.pageId}>
-                    <div className="analysis-failure-item-heading">
-                      <strong>第 {item.pageNumber} 页 · {item.subject}</strong>
-                      <StatusBadge tone={item.error?.retryable === false ? "warning" : "danger"}>
-                        {item.error?.retryable === false ? "修复后重试" : "可重试"}
-                      </StatusBadge>
-                    </div>
-                    <p className="analysis-failure-message">{item.message}</p>
-                    {item.error ? (
-                      <p className="analysis-failure-meta">
-                        {item.error.stage} · {item.error.code}
-                      </p>
-                    ) : null}
-                    {item.error?.details ? (
-                      <p className="error-details">{item.error.details}</p>
-                    ) : null}
-                    {item.error?.correlation_id ? (
-                      <p className="error-correlation">
-                        诊断编号：{item.error.correlation_id}
-                      </p>
-                    ) : null}
-                  </li>
-                ))}
+                {group.items.map((item) => {
+                  const retryStatus = analysisFailureRetryStatus(item);
+                  return (
+                    <li className="analysis-failure-item" key={item.pageId}>
+                      <div className="analysis-failure-item-heading">
+                        <strong>第 {item.pageNumber} 页 · {item.subject}</strong>
+                        <StatusBadge tone={retryStatus.tone}>{retryStatus.label}</StatusBadge>
+                      </div>
+                      <p className="analysis-failure-message">{item.message}</p>
+                      {item.error ? (
+                        <p className="analysis-failure-meta">
+                          {item.error.stage} · {item.error.code}
+                        </p>
+                      ) : null}
+                      {item.error?.details ? (
+                        <p className="error-details">{item.error.details}</p>
+                      ) : null}
+                      {item.error?.correlation_id ? (
+                        <p className="error-correlation">
+                          诊断编号：{item.error.correlation_id}
+                        </p>
+                      ) : null}
+                    </li>
+                  );
+                })}
               </ul>
 
               {retryError ? (
@@ -730,7 +731,7 @@ export function buildAnalysisFailureGroups(
   for (const document of documents) {
     const items: AnalysisFailureItem[] = [];
     for (const page of pagesByDocument[document.document_id] ?? []) {
-      const failedPageCount = page.status === "failed" ? 1 : 0;
+      const failedPageCount = page.status === "failed" || page.page_analysis_failed ? 1 : 0;
       const failedVisualModuleCount = countValue(page.failed_visual_module_count);
       const failedCount = failedPageCount + failedVisualModuleCount;
       if (failedCount === 0) {
@@ -767,6 +768,18 @@ export function buildAnalysisFailureGroups(
     }
   }
   return groups;
+}
+
+function analysisFailureRetryStatus(item: AnalysisFailureItem) {
+  if (item.failedCount > 1) {
+    return { tone: "warning" as const, label: "批量重试" };
+  }
+  if (!item.error) {
+    return { tone: "neutral" as const, label: "可手动重试" };
+  }
+  return item.error.retryable
+    ? { tone: "danger" as const, label: "可直接重试" }
+    : { tone: "warning" as const, label: "修复后重试" };
 }
 
 function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
@@ -973,6 +986,10 @@ function toDisplayError(error: AppErrorDto, title: string): AnalysisDisplayError
     details: error.details,
     correlationId: error.correlation_id,
   };
+}
+
+function withErrorTitle(error: AnalysisDisplayError, title: string): AnalysisDisplayError {
+  return { ...error, title };
 }
 
 function extractError(error: unknown): AnalysisDisplayError {

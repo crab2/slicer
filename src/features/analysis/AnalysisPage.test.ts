@@ -66,7 +66,8 @@ describe("analysis overview", () => {
     const groups = buildAnalysisFailureGroups(documents, {
       "doc-a": [
         page("page-failed", "doc-a", {
-          status: "failed",
+          status: "rendered",
+          page_analysis_failed: true,
           error_summary: "旧摘要",
           analysis_error: providerError,
         }),
