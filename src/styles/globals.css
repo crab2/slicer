@@ -615,6 +615,79 @@ h3 {
   min-width: 0;
 }
 
+.analysis-failure-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.analysis-failure-list,
+.analysis-failure-items {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.analysis-failure-document {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding-top: 16px;
+  border-top: 1px solid #dfe3e7;
+}
+
+.analysis-failure-document:first-child {
+  padding-top: 0;
+  border-top: 0;
+}
+
+.analysis-failure-document-header,
+.analysis-failure-item-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.analysis-failure-document-header h3,
+.analysis-failure-item-heading strong {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.analysis-failure-document-header h3 {
+  font-size: 15px;
+}
+
+.analysis-failure-items {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.analysis-failure-item {
+  min-width: 0;
+  padding: 11px 12px;
+  border-left: 3px solid #c86a6d;
+  background: #fff7f7;
+}
+
+.analysis-failure-message {
+  margin: 6px 0 0;
+  color: #5d3335;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.analysis-failure-meta {
+  margin: 5px 0 0;
+  color: #7d696a;
+  font-family: monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
 .job-list-panel {
   display: grid;
   gap: 14px;
@@ -2429,6 +2502,8 @@ h3 {
 @media (max-width: 520px) {
   .topbar,
   .panel-header,
+  .analysis-failure-document-header,
+  .analysis-failure-item-heading,
   .document-viewer-header,
   .job-card-header,
   .job-meta,
@@ -2436,6 +2511,10 @@ h3 {
   .workspace-summary {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .analysis-failure-document-header .button {
+    width: 100%;
   }
 
   .setting-actions {

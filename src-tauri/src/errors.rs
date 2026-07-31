@@ -92,6 +92,10 @@ mod tests {
             redact_secrets("raw_response={\"content\":\"...\"}"),
             "[redacted]"
         );
+        assert_eq!(
+            redact_secrets("response_preview={\"content\":\"provider output\"}"),
+            "[redacted]"
+        );
         assert_eq!(redact_secrets("x-api-key: sk-secret"), "[redacted]");
         assert_eq!(redact_secrets(r#"{"api_key":"sk-secret"}"#), "[redacted]");
         assert_eq!(
@@ -164,7 +168,7 @@ fn contains_openai_api_key(lower: &str) -> bool {
 }
 
 pub fn redact_secrets(input: &str) -> String {
-    const ASSIGNMENT_SECRET_KEYS: [&str; 10] = [
+    const ASSIGNMENT_SECRET_KEYS: [&str; 11] = [
         "api_key",
         "api-key",
         "apikey",
@@ -172,6 +176,7 @@ pub fn redact_secrets(input: &str) -> String {
         "image_base64",
         "image_url",
         "raw_response",
+        "response_preview",
         "request_body",
         "token",
         "secret",

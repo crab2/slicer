@@ -219,6 +219,8 @@ export interface PageWorkbenchDto {
   created_at: string;
   updated_at: string;
   analysis_summary: PageAnalysisSummaryDto | null;
+  page_analysis_failed?: boolean;
+  analysis_error?: AppErrorDto | null;
   visual_module_count?: number;
   pending_visual_module_count?: number;
   succeeded_visual_module_count?: number;

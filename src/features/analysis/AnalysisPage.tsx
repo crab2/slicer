@@ -40,6 +40,22 @@ interface AnalysisDisplayError {
   correlationId?: string | null;
 }
 
+export interface AnalysisFailureItem {
+  pageId: string;
+  pageNumber: number;
+  failedCount: number;
+  subject: string;
+  message: string;
+  error: AppErrorDto | null;
+}
+
+export interface AnalysisFailureGroup {
+  documentId: string;
+  documentName: string;
+  failedCount: number;
+  items: AnalysisFailureItem[];
+}
+
 export function AnalysisPage({
   workspaceReady,
   isActive,
@@ -53,13 +69,23 @@ export function AnalysisPage({
   const [isAcceptingPrivacy, setIsAcceptingPrivacy] = useState(false);
   const [analysisReadyMessage, setAnalysisReadyMessage] = useState<string | null>(null);
   const [analysisError, setAnalysisError] = useState<AnalysisDisplayError | null>(null);
+  const [refreshError, setRefreshError] = useState<AnalysisDisplayError | null>(null);
   const [isBatchAnalyzing, setIsBatchAnalyzing] = useState(false);
   const [isReanalyzing, setIsReanalyzing] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"new-pages" | "reanalysis" | null>(null);
+  const [pendingAction, setPendingAction] = useState<
+    "new-pages" | "reanalysis" | "failed-retry" | null
+  >(null);
+  const [pendingRetryDocumentId, setPendingRetryDocumentId] = useState<string | null>(null);
+  const [retryingDocumentId, setRetryingDocumentId] = useState<string | null>(null);
+  const [retryErrors, setRetryErrors] = useState<Record<string, AnalysisDisplayError>>({});
   const [documents, setDocuments] = useState<DocumentDto[]>([]);
   const [pagesByDocument, setPagesByDocument] = useState<Record<string, PageWorkbenchDto[]>>({});
 
   const analysisStats = computeAnalysisStats(documents, pagesByDocument);
+  const failureGroups = useMemo(
+    () => buildAnalysisFailureGroups(documents, pagesByDocument),
+    [documents, pagesByDocument],
+  );
   const reanalysisSummary = useMemo(
     () =>
       navigationContext?.action === "reanalyze"
@@ -70,6 +96,8 @@ export function AnalysisPage({
   const analysisConfigured =
     modelStatus?.configured &&
     (!modelStatus.requires_privacy_notice || modelStatus.privacy_notice_accepted);
+  const isAnalysisBusy =
+    isBatchAnalyzing || isReanalyzing || retryingDocumentId !== null;
 
   async function refreshModelStatus() {
     setIsModelStatusLoading(true);
@@ -86,23 +114,32 @@ export function AnalysisPage({
     if (!workspaceReady) {
       setDocuments([]);
       setPagesByDocument({});
+      setRefreshError(null);
       return;
     }
     try {
       const docs = await tauriClient.listDocuments();
       setDocuments(docs);
-      const pagesMap: Record<string, PageWorkbenchDto[]> = {};
+      const loadedPages: Record<string, PageWorkbenchDto[]> = {};
+      let firstPageError: AnalysisDisplayError | null = null;
       for (const doc of docs) {
         try {
-          pagesMap[doc.document_id] = await tauriClient.listWorkbenchPages(doc.document_id);
-        } catch {
-          pagesMap[doc.document_id] = [];
+          loadedPages[doc.document_id] = await tauriClient.listWorkbenchPages(doc.document_id);
+        } catch (error) {
+          firstPageError ??= withErrorTitle(extractError(error), "失败状态刷新失败");
         }
       }
-      setPagesByDocument(pagesMap);
-    } catch {
-      setDocuments([]);
-      setPagesByDocument({});
+      setPagesByDocument((current) =>
+        Object.fromEntries(
+          docs.map((doc) => [
+            doc.document_id,
+            loadedPages[doc.document_id] ?? current[doc.document_id] ?? [],
+          ]),
+        ),
+      );
+      setRefreshError(firstPageError);
+    } catch (error) {
+      setRefreshError(withErrorTitle(extractError(error), "失败状态刷新失败"));
     }
   }
 
@@ -123,6 +160,16 @@ export function AnalysisPage({
     }, 2000);
     return () => window.clearInterval(timer);
   }, [workspaceReady, isActive, isBatchAnalyzing, isReanalyzing]);
+
+  useEffect(() => {
+    const activeDocumentIds = new Set(failureGroups.map((group) => group.documentId));
+    setRetryErrors((current) => {
+      const next = Object.fromEntries(
+        Object.entries(current).filter(([documentId]) => activeDocumentIds.has(documentId)),
+      );
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [failureGroups]);
 
   async function handleAnalysisEntry() {
     setAnalysisError(null);
@@ -219,6 +266,44 @@ export function AnalysisPage({
     }
   }
 
+  async function handleRetryFailedDocument(documentId: string) {
+    setAnalysisError(null);
+    setAnalysisReadyMessage(null);
+    setRetryErrors((current) => omitRecordKey(current, documentId));
+    if (!modelStatus?.configured) {
+      onOpenSettings();
+      return;
+    }
+    if (modelStatus.requires_privacy_notice && !modelStatus.privacy_notice_accepted) {
+      setPendingAction("failed-retry");
+      setPendingRetryDocumentId(documentId);
+      setShowPrivacyNotice(true);
+      return;
+    }
+    await executeRetryFailedDocument(documentId);
+  }
+
+  async function executeRetryFailedDocument(documentId: string) {
+    setRetryingDocumentId(documentId);
+    setRetryErrors((current) => omitRecordKey(current, documentId));
+    try {
+      const result = await tauriClient.reanalyzeFailedPages(documentId);
+      setAnalysisReadyMessage(formatBatchMessage("失败项重试完成", result));
+      const resultError = getBatchResultError(result);
+      if (resultError) {
+        setRetryErrors((current) => ({ ...current, [documentId]: resultError }));
+      }
+    } catch (error) {
+      setRetryErrors((current) => ({
+        ...current,
+        [documentId]: extractError(error),
+      }));
+    } finally {
+      await refreshDocuments();
+      setRetryingDocumentId(null);
+    }
+  }
+
   async function handlePrivacyConfirm() {
     setIsAcceptingPrivacy(true);
     try {
@@ -227,11 +312,15 @@ export function AnalysisPage({
       const status = await tauriClient.getModelConfigurationStatus();
       setModelStatus(status);
       const action = pendingAction;
+      const retryDocumentId = pendingRetryDocumentId;
       setPendingAction(null);
+      setPendingRetryDocumentId(null);
       if (action === "new-pages") {
         await executeAnalyzeNewPages();
       } else if (action === "reanalysis") {
         await executeReanalysis();
+      } else if (action === "failed-retry" && retryDocumentId) {
+        await executeRetryFailedDocument(retryDocumentId);
       } else {
         setAnalysisReadyMessage("隐私提示已确认。可以开始模型分析。");
       }
@@ -299,11 +388,19 @@ export function AnalysisPage({
             correlationId={analysisError.correlationId}
           />
         ) : null}
+        {refreshError ? (
+          <ErrorMessage
+            title={refreshError.title}
+            message={refreshError.message}
+            details={refreshError.details}
+            correlationId={refreshError.correlationId}
+          />
+        ) : null}
         <div className="action-row workbench-actions">
           <Button
             variant="primary"
             onClick={() => void handleAnalysisEntry()}
-            disabled={isModelStatusLoading || isBatchAnalyzing || !modelStatus?.configured}
+            disabled={isModelStatusLoading || isAnalysisBusy || !modelStatus?.configured}
           >
             {!modelStatus?.configured
               ? "完成模型配置"
@@ -319,11 +416,21 @@ export function AnalysisPage({
         </div>
       </section>
 
+      {failureGroups.length > 0 ? (
+        <AnalysisFailurePanel
+          groups={failureGroups}
+          retryErrors={retryErrors}
+          retryingDocumentId={retryingDocumentId}
+          isAnalysisBusy={isBatchAnalyzing || isReanalyzing}
+          onRetry={(documentId) => void handleRetryFailedDocument(documentId)}
+        />
+      ) : null}
+
       {reanalysisSummary ? (
         <ReanalysisContextSummary
           summary={reanalysisSummary}
           modelReady={Boolean(modelStatus?.configured)}
-          isRunning={isReanalyzing}
+          isRunning={isAnalysisBusy}
           onDefaultReanalysis={() => void handleDefaultReanalysis()}
           onReturn={onReturnToSource}
           onOpenSettings={onOpenSettings}
@@ -336,10 +443,100 @@ export function AnalysisPage({
         onCancel={() => {
           setShowPrivacyNotice(false);
           setPendingAction(null);
+          setPendingRetryDocumentId(null);
         }}
         isSubmitting={isAcceptingPrivacy}
       />
     </div>
+  );
+}
+
+function AnalysisFailurePanel({
+  groups,
+  retryErrors,
+  retryingDocumentId,
+  isAnalysisBusy,
+  onRetry,
+}: {
+  groups: AnalysisFailureGroup[];
+  retryErrors: Record<string, AnalysisDisplayError>;
+  retryingDocumentId: string | null;
+  isAnalysisBusy: boolean;
+  onRetry: (documentId: string) => void;
+}) {
+  const failedCount = groups.reduce((sum, group) => sum + group.failedCount, 0);
+  return (
+    <section className="panel panel-wide analysis-failure-panel" aria-labelledby="analysis-failure-title">
+      <div className="panel-header">
+        <div>
+          <p className="eyebrow">失败恢复</p>
+          <h2 id="analysis-failure-title">需要重试</h2>
+          <p className="muted-copy">
+            共 {failedCount} 个分析项失败。已完成的结果不会受重试影响。
+          </p>
+        </div>
+        <StatusBadge tone="danger">{failedCount} 项失败</StatusBadge>
+      </div>
+
+      <div className="analysis-failure-list">
+        {groups.map((group) => {
+          const isRetrying = retryingDocumentId === group.documentId;
+          const retryError = retryErrors[group.documentId];
+          return (
+            <section className="analysis-failure-document" key={group.documentId}>
+              <div className="analysis-failure-document-header">
+                <div>
+                  <h3>{group.documentName}</h3>
+                  <p className="muted-copy">{group.failedCount} 个失败项</p>
+                </div>
+                <Button
+                  onClick={() => onRetry(group.documentId)}
+                  disabled={isAnalysisBusy || retryingDocumentId !== null}
+                >
+                  {isRetrying ? "重试中..." : "重试该文档失败项"}
+                </Button>
+              </div>
+
+              <ul className="analysis-failure-items">
+                {group.items.map((item) => (
+                  <li className="analysis-failure-item" key={item.pageId}>
+                    <div className="analysis-failure-item-heading">
+                      <strong>第 {item.pageNumber} 页 · {item.subject}</strong>
+                      <StatusBadge tone={item.error?.retryable === false ? "warning" : "danger"}>
+                        {item.error?.retryable === false ? "修复后重试" : "可重试"}
+                      </StatusBadge>
+                    </div>
+                    <p className="analysis-failure-message">{item.message}</p>
+                    {item.error ? (
+                      <p className="analysis-failure-meta">
+                        {item.error.stage} · {item.error.code}
+                      </p>
+                    ) : null}
+                    {item.error?.details ? (
+                      <p className="error-details">{item.error.details}</p>
+                    ) : null}
+                    {item.error?.correlation_id ? (
+                      <p className="error-correlation">
+                        诊断编号：{item.error.correlation_id}
+                      </p>
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+
+              {retryError ? (
+                <ErrorMessage
+                  title={retryError.title}
+                  message={retryError.message}
+                  details={retryError.details}
+                  correlationId={retryError.correlationId}
+                />
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -523,6 +720,59 @@ function selectedKindLabel(kind: NavigationContext["selected_kind"]) {
     default:
       return kind;
   }
+}
+
+export function buildAnalysisFailureGroups(
+  documents: DocumentDto[],
+  pagesByDocument: Record<string, PageWorkbenchDto[]>,
+): AnalysisFailureGroup[] {
+  const groups: AnalysisFailureGroup[] = [];
+  for (const document of documents) {
+    const items: AnalysisFailureItem[] = [];
+    for (const page of pagesByDocument[document.document_id] ?? []) {
+      const failedPageCount = page.status === "failed" ? 1 : 0;
+      const failedVisualModuleCount = countValue(page.failed_visual_module_count);
+      const failedCount = failedPageCount + failedVisualModuleCount;
+      if (failedCount === 0) {
+        continue;
+      }
+
+      const subjects: string[] = [];
+      if (failedPageCount > 0) {
+        subjects.push("页面分析失败");
+      }
+      if (failedVisualModuleCount > 0) {
+        subjects.push(`${failedVisualModuleCount} 个视觉模块失败`);
+      }
+      const error = page.analysis_error ?? null;
+      items.push({
+        pageId: page.page_id,
+        pageNumber: page.page_number,
+        failedCount,
+        subject: subjects.join("、"),
+        message:
+          error?.message.trim() ||
+          page.error_summary?.trim() ||
+          "未记录具体失败原因。请重试；如仍失败，请检查模型设置。",
+        error,
+      });
+    }
+    if (items.length > 0) {
+      groups.push({
+        documentId: document.document_id,
+        documentName: document.original_filename,
+        failedCount: items.reduce((sum, item) => sum + item.failedCount, 0),
+        items,
+      });
+    }
+  }
+  return groups;
+}
+
+function omitRecordKey<T>(record: Record<string, T>, key: string): Record<string, T> {
+  const next = { ...record };
+  delete next[key];
+  return next;
 }
 
 function formatMissingFields(missing: string[]): string {

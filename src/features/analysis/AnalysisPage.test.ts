@@ -5,6 +5,7 @@ import type {
   PageWorkbenchDto,
 } from "../../types/app";
 import {
+  buildAnalysisFailureGroups,
   computeAnalysisStats,
   formatAnalysisOverview,
   formatBatchMessage,
@@ -52,6 +53,69 @@ function page(
 }
 
 describe("analysis overview", () => {
+  it("groups persisted page and visual-module failures by document", () => {
+    const documents = [document("doc-a"), document("doc-b")];
+    const providerError = {
+      code: "model_http_status_failed",
+      message: "模型服务拒绝了分析请求。",
+      stage: "analysis_provider",
+      retryable: true,
+      details: "status=403; endpoint_kind=openai",
+      correlation_id: "diagnostic-403",
+    };
+    const groups = buildAnalysisFailureGroups(documents, {
+      "doc-a": [
+        page("page-failed", "doc-a", {
+          status: "failed",
+          error_summary: "旧摘要",
+          analysis_error: providerError,
+        }),
+        page("visual-failed", "doc-a", {
+          status: "structured",
+          visual_module_count: 2,
+          pending_visual_module_count: 0,
+          succeeded_visual_module_count: 0,
+          failed_visual_module_count: 2,
+          analysis_error: providerError,
+        }),
+      ],
+      "doc-b": [
+        page("visual-fallback", "doc-b", {
+          status: "structured",
+          visual_module_count: 1,
+          pending_visual_module_count: 0,
+          succeeded_visual_module_count: 0,
+          failed_visual_module_count: 1,
+        }),
+      ],
+    });
+
+    expect(groups).toHaveLength(2);
+    expect(groups[0].failedCount).toBe(3);
+    expect(groups[0].items[0]).toMatchObject({
+      pageId: "page-failed",
+      subject: "页面分析失败",
+      message: "模型服务拒绝了分析请求。",
+    });
+    expect(groups[0].items[1].subject).toBe("2 个视觉模块失败");
+    expect(groups[0].items[1].error?.correlation_id).toBe("diagnostic-403");
+    expect(groups[1].items[0].message).toContain("未记录具体失败原因");
+  });
+
+  it("keeps a persisted page summary when structured diagnostics are unavailable", () => {
+    const groups = buildAnalysisFailureGroups([document("doc")], {
+      doc: [
+        page("failed-page", "doc", {
+          status: "failed",
+          error_summary: "页面图片读取失败，请检查文件后重试。",
+        }),
+      ],
+    });
+
+    expect(groups[0].items[0].message).toBe("页面图片读取失败，请检查文件后重试。");
+    expect(groups[0].items[0].error).toBeNull();
+  });
+
   it("shows legacy page and structured visual-module statistics together", () => {
     const documents = [document("legacy"), document("structured")];
     const pagesByDocument = {

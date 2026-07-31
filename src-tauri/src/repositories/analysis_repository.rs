@@ -3,12 +3,13 @@ use crate::domain::analysis::{
     AnalysisResultDto, PageAnalysisSummaryDto, PageAnalysisV1, PageWorkbenchDto,
 };
 use crate::domain::page::PageRecordDto;
-use crate::errors::{AppError, AppResult};
+use crate::errors::{redact_secrets, AppError, AppResult};
 use crate::repositories::db::block_on_db;
 use crate::repositories::document_repository::DocumentRepository;
 use crate::repositories::pdf_structure_repository::PdfStructureRepository;
 use chrono::Utc;
 use sqlx::SqliteConnection;
+use std::collections::HashMap;
 use uuid::Uuid;
 
 pub struct AnalysisRepository;
@@ -114,16 +115,91 @@ impl AnalysisRepository {
         document_id: &str,
     ) -> AppResult<Vec<PageWorkbenchDto>> {
         let pages = DocumentRepository::list_pages_by_document(conn, document_id)?;
+        let failures = Self::list_failure_snapshots_for_document(conn, document_id)?;
         let mut items = Vec::with_capacity(pages.len());
         for page in pages {
-            items.push(Self::page_to_workbench(conn, page)?);
+            let failure = failures.get(&page.page_id);
+            items.push(Self::page_to_workbench(conn, page, failure)?);
         }
         Ok(items)
+    }
+
+    fn list_failure_snapshots_for_document(
+        conn: &mut SqliteConnection,
+        document_id: &str,
+    ) -> AppResult<HashMap<String, PageFailureSnapshot>> {
+        block_on_db(async {
+            let rows = sqlx::query_as::<_, StoredPageFailureRow>(
+                "SELECT failures.page_id, failures.failure_kind,
+                        failures.updated_at AS _updated_at,
+                        failures.failure_key AS _failure_key,
+                        errors.code, errors.message, errors.stage, errors.retryable,
+                        errors.details, errors.correlation_id
+                 FROM (
+                   SELECT analysis_results.page_id, 'page' AS failure_kind,
+                          analysis_results.updated_at,
+                          analysis_results.analysis_id AS failure_key,
+                          analysis_results.error_id
+                   FROM analysis_results
+                   WHERE analysis_results.page_id IN (
+                     SELECT page_id FROM page_records WHERE document_id = ?1
+                   )
+                     AND analysis_results.status = 'failed'
+                   UNION ALL
+                   SELECT content_blocks.page_id, 'visual' AS failure_kind,
+                          visual_module_analysis.updated_at,
+                          visual_module_analysis.analysis_id AS failure_key,
+                          visual_module_analysis.error_id
+                   FROM visual_module_analysis
+                   INNER JOIN content_blocks
+                     ON content_blocks.block_id = visual_module_analysis.block_id
+                   INNER JOIN pdf_parse_runs
+                     ON pdf_parse_runs.parse_id = content_blocks.parse_id
+                    AND pdf_parse_runs.status = 'succeeded'
+                   INNER JOIN documents
+                     ON documents.document_id = content_blocks.document_id
+                    AND documents.status = 'ready'
+                   WHERE content_blocks.document_id = ?1
+                     AND visual_module_analysis.status = 'failed'
+                     AND content_blocks.is_visual = 1
+                     AND content_blocks.is_decorative = 0
+                     AND EXISTS (
+                       SELECT 1 FROM document_artifacts
+                       WHERE document_artifacts.document_id = content_blocks.document_id
+                         AND document_artifacts.kind = 'canonical_pdf'
+                     )
+                 ) failures
+                 LEFT JOIN errors ON errors.error_id = failures.error_id
+                 ORDER BY failures.page_id, failures.updated_at DESC,
+                          failures.failure_key ASC",
+            )
+            .bind(document_id)
+            .fetch_all(conn)
+            .await
+            .map_err(|err| {
+                super::db::database_error("analysis", "analysis_failure_lookup_failed", err)
+            })?;
+            let mut failures = HashMap::new();
+            for row in rows {
+                let entry = failures
+                    .entry(row.page_id.clone())
+                    .or_insert_with(PageFailureSnapshot::default);
+                if row.failure_kind == "page" {
+                    entry.page_analysis_failed = true;
+                }
+                if !entry.representative_selected {
+                    entry.latest_error = row.into_app_error();
+                    entry.representative_selected = true;
+                }
+            }
+            Ok(failures)
+        })
     }
 
     fn page_to_workbench(
         conn: &mut SqliteConnection,
         page: PageRecordDto,
+        failure: Option<&PageFailureSnapshot>,
     ) -> AppResult<PageWorkbenchDto> {
         let image_path = match page.image_hash.as_deref() {
             Some(image_hash) => DocumentRepository::find_image_asset_by_hash(conn, image_hash)?
@@ -144,10 +220,14 @@ impl AnalysisRepository {
             image_hash: page.image_hash,
             image_path,
             status: page.status,
-            error_summary: page.error_summary,
+            error_summary: page
+                .error_summary
+                .map(|summary| redact_secrets(&summary)),
             created_at: page.created_at,
             updated_at: page.updated_at,
             analysis_summary,
+            page_analysis_failed: failure.is_some_and(|item| item.page_analysis_failed),
+            analysis_error: failure.and_then(|item| item.latest_error.clone()),
             visual_module_count: visual_counts.map(|counts| counts.total),
             pending_visual_module_count: visual_counts.map(|counts| counts.pending),
             succeeded_visual_module_count: visual_counts.map(|counts| counts.succeeded),
@@ -271,6 +351,40 @@ impl AnalysisRepository {
     }
 }
 
+#[derive(Default)]
+struct PageFailureSnapshot {
+    page_analysis_failed: bool,
+    latest_error: Option<AppError>,
+    representative_selected: bool,
+}
+
+#[derive(sqlx::FromRow)]
+struct StoredPageFailureRow {
+    page_id: String,
+    failure_kind: String,
+    _updated_at: String,
+    _failure_key: String,
+    code: Option<String>,
+    message: Option<String>,
+    stage: Option<String>,
+    retryable: Option<i64>,
+    details: Option<String>,
+    correlation_id: Option<String>,
+}
+
+impl StoredPageFailureRow {
+    fn into_app_error(self) -> Option<AppError> {
+        Some(AppError {
+            code: self.code?,
+            message: redact_secrets(&self.message?),
+            stage: self.stage?,
+            retryable: self.retryable? != 0,
+            details: self.details.map(|details| redact_secrets(&details)),
+            correlation_id: self.correlation_id?,
+        })
+    }
+}
+
 #[derive(sqlx::FromRow)]
 struct AnalysisResultRow {
     analysis_id: String,
@@ -350,7 +464,8 @@ mod tests {
         block_on_db(async {
             sqlx::query(
                 "INSERT INTO errors (error_id, code, message, stage, retryable, details, correlation_id, created_at)
-                 VALUES (?1, 'analysis_failed', '分析失败', 'analysis', 1, NULL, ?2, ?3)",
+                 VALUES (?1, 'model_http_status_failed', '模型服务请求失败。',
+                         'analysis_provider', 1, 'status=403; endpoint_kind=openai', ?2, ?3)",
             )
             .bind(error_id)
             .bind(format!("correlation-{error_id}"))
@@ -361,6 +476,98 @@ mod tests {
             Ok(())
         })
         .expect("seed error");
+    }
+
+    fn seed_visual_failure(
+        conn: &mut sqlx::SqliteConnection,
+        page: &crate::domain::page::PageRecordDto,
+        error_id: &str,
+    ) {
+        block_on_db(async {
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query("UPDATE documents SET status = 'ready' WHERE document_id = ?1")
+                .bind(&page.document_id)
+                .execute(&mut *conn)
+                .await
+                .map_err(|err| {
+                    crate::repositories::db::database_error(
+                        "test",
+                        "visual_document_ready_failed",
+                        err,
+                    )
+                })?;
+            sqlx::query("UPDATE page_records SET status = 'structured' WHERE page_id = ?1")
+                .bind(&page.page_id)
+                .execute(&mut *conn)
+                .await
+                .map_err(|err| {
+                    crate::repositories::db::database_error(
+                        "test",
+                        "visual_page_structured_failed",
+                        err,
+                    )
+                })?;
+            sqlx::query(
+                "INSERT INTO document_artifacts
+                 (artifact_id, document_id, kind, relative_path, content_hash,
+                  parser_name, parser_version, parser_options_json, created_at, updated_at)
+                 VALUES ('artifact-canonical', ?1, 'canonical_pdf', 'canonical/sample.pdf',
+                         'canonical-hash', 'test', '1', '{}', ?2, ?2)",
+            )
+            .bind(&page.document_id)
+            .bind(&now)
+            .execute(&mut *conn)
+            .await
+            .map_err(|err| {
+                crate::repositories::db::database_error("test", "visual_artifact_seed_failed", err)
+            })?;
+            sqlx::query(
+                "INSERT INTO pdf_parse_runs
+                 (parse_id, document_id, parser_name, parser_version, schema_version,
+                  parser_options_json, status, raw_json_path, error_id, created_at, updated_at)
+                 VALUES ('parse-visual', ?1, 'test', '1', 'test-v1', '{}', 'succeeded',
+                         'metadata/structure.json', NULL, ?2, ?2)",
+            )
+            .bind(&page.document_id)
+            .bind(&now)
+            .execute(&mut *conn)
+            .await
+            .map_err(|err| {
+                crate::repositories::db::database_error("test", "visual_parse_seed_failed", err)
+            })?;
+            sqlx::query(
+                "INSERT INTO content_blocks
+                 (block_id, parse_id, document_id, page_id, page_number, ordinal,
+                  block_type, source_text, raw_json, source_image_path,
+                  is_indexable, is_visual, is_decorative, created_at, updated_at)
+                 VALUES ('block-visual', 'parse-visual', ?1, ?2, 1, 0, 'figure', '', '{}',
+                         'metadata/visual.png', 1, 1, 0, ?3, ?3)",
+            )
+            .bind(&page.document_id)
+            .bind(&page.page_id)
+            .bind(&now)
+            .execute(&mut *conn)
+            .await
+            .map_err(|err| {
+                crate::repositories::db::database_error("test", "visual_block_seed_failed", err)
+            })?;
+            sqlx::query(
+                "INSERT INTO visual_module_analysis
+                 (analysis_id, block_id, schema_version, provider, model_name, status,
+                  result_json, error_id, attempt_count, created_at, updated_at)
+                 VALUES ('analysis-visual', 'block-visual', 'visual_module_analysis_v1',
+                         'openai', 'test-model', 'failed', NULL, ?1, 1, ?2, ?2)",
+            )
+            .bind(error_id)
+            .bind(&now)
+            .execute(&mut *conn)
+            .await
+            .map_err(|err| {
+                crate::repositories::db::database_error("test", "visual_analysis_seed_failed", err)
+            })?;
+            Ok(())
+        })
+        .expect("seed visual failure");
     }
 
     #[test]
@@ -413,6 +620,76 @@ mod tests {
         assert_eq!(result.status, "failed");
         assert!(result.result_json.is_none());
         assert_eq!(result.error_id.as_deref(), Some("error-1"));
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workbench_page_includes_current_page_failure_diagnostics() {
+        let (mut conn, root) = test_connection();
+        seed_page(&mut conn);
+        seed_error(&mut conn, "error-page");
+        let page = DocumentRepository::list_all_pages(&mut conn)
+            .expect("pages")
+            .remove(0);
+        AnalysisRepository::save_failure_result(
+            &mut conn,
+            &page.page_id,
+            PAGE_ANALYSIS_SCHEMA_VERSION,
+            "openai",
+            "test-model",
+            "error-page",
+        )
+        .expect("save failure");
+        block_on_db(async {
+            sqlx::query(
+                r#"UPDATE errors SET details = 'response_preview={"content":"raw output"}'
+                   WHERE error_id = 'error-page'"#,
+            )
+            .execute(&mut conn)
+            .await
+            .map_err(|err| {
+                crate::repositories::db::database_error(
+                    "test",
+                    "response_preview_seed_failed",
+                    err,
+                )
+            })?;
+            Ok(())
+        })
+        .expect("seed response preview");
+
+        let items = AnalysisRepository::list_workbench_pages(&mut conn, &page.document_id)
+            .expect("workbench pages");
+        assert_eq!(items[0].status, "rendered");
+        assert!(items[0].page_analysis_failed);
+        let error = items[0].analysis_error.as_ref().expect("analysis error");
+        assert_eq!(error.code, "model_http_status_failed");
+        assert_eq!(error.stage, "analysis_provider");
+        assert!(error.retryable);
+        assert_eq!(error.details.as_deref(), Some("[redacted]"));
+        assert_eq!(error.correlation_id, "correlation-error-page");
+
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn workbench_page_includes_visual_module_failure_diagnostics() {
+        let (mut conn, root) = test_connection();
+        seed_page(&mut conn);
+        seed_error(&mut conn, "error-visual");
+        let page = DocumentRepository::list_all_pages(&mut conn)
+            .expect("pages")
+            .remove(0);
+        seed_visual_failure(&mut conn, &page, "error-visual");
+
+        let items = AnalysisRepository::list_workbench_pages(&mut conn, &page.document_id)
+            .expect("workbench pages");
+        assert_eq!(items[0].failed_visual_module_count, Some(1));
+        assert!(!items[0].page_analysis_failed);
+        let error = items[0].analysis_error.as_ref().expect("analysis error");
+        assert_eq!(error.code, "model_http_status_failed");
+        assert_eq!(error.correlation_id, "correlation-error-visual");
 
         let _ = fs::remove_dir_all(root);
     }

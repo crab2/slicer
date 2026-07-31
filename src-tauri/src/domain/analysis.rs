@@ -112,6 +112,9 @@ pub struct PageWorkbenchDto {
     pub created_at: String,
     pub updated_at: String,
     pub analysis_summary: Option<PageAnalysisSummaryDto>,
+    pub page_analysis_failed: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub analysis_error: Option<AppError>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub visual_module_count: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
