@@ -511,8 +511,7 @@ fn flatten_node(
         .get(&page_number)
         .ok_or_else(|| schema_error(&format!("unknown page number {page_number}")))?;
     let source_element_id = object.get("id").and_then(value_id);
-    let identity = source_element_id.as_deref().unwrap_or(path);
-    let block_id = stable_block_id(document_id, identity, path);
+    let block_id = opendataloader_block_id(document_id, node, path);
     let raw_bbox = object.get("bounding box").and_then(parse_raw_bbox);
     let bbox = raw_bbox.and_then(|bbox| normalize_pdf_bbox(bbox, page.geometry));
     let mut own_source_text = object
@@ -789,6 +788,15 @@ fn value_id(value: &Value) -> Option<String> {
         Value::Number(value) => Some(value.to_string()),
         _ => None,
     }
+}
+
+pub(crate) fn opendataloader_block_id(document_id: &str, node: &Value, path: &str) -> String {
+    let source_element_id = node.get("id").and_then(value_id);
+    stable_block_id(
+        document_id,
+        source_element_id.as_deref().unwrap_or(path),
+        path,
+    )
 }
 
 fn parse_raw_bbox(value: &Value) -> Option<[f64; 4]> {

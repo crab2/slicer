@@ -189,6 +189,24 @@ export interface DocumentViewerContentDto {
   assets: DocumentViewerAssetDto[];
 }
 
+export interface PdfPageGeometryDto {
+  width_points: number;
+  height_points: number;
+  crop_left_points: number;
+  crop_bottom_points: number;
+  crop_right_points: number;
+  crop_top_points: number;
+  rotation_degrees: 0 | 90 | 180 | 270;
+}
+
+export interface DocumentViewerPagePreviewDto {
+  format: "annot";
+  page_number: number;
+  mime_type: "image/png";
+  data_url: string;
+  geometry: PdfPageGeometryDto;
+}
+
 export interface PageRecordDto {
   page_id: string;
   document_id: string;

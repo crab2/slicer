@@ -110,13 +110,13 @@ export function MediaManagementPage({
 
   async function refreshAll() {
     await Promise.all([refreshDocuments(), refreshJobs()]);
+    setViewerRefreshKey((current) => current + 1);
   }
 
   async function handleRetryImport(documentId: string) {
     setError(null);
     try {
       await tauriClient.retryImport(documentId);
-      setViewerRefreshKey((current) => current + 1);
     } catch (nextError) {
       setError(extractError(nextError));
     } finally {

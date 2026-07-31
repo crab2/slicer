@@ -58,3 +58,15 @@ Collected during story 1.4 review (2026-05-18).
 - source_spec: `_bmad-output/implementation-artifacts/spec-fix-model-analysis-and-model-fetch-feedback.md`
   summary: 多文档重分析遇到命令级异常时会停止后续文档并丢失已收集批次的汇总反馈。
   evidence: `AnalysisPage.executeReanalysis` 的异常捕获位于文档循环外；这属于既有多文档编排行为，需要独立决定继续执行、合并统计和基础设施异常的展示规则。
+- source_spec: `_bmad-output/implementation-artifacts/spec-annot-json-synchronization.md`
+  summary: 对齐 Annot 制品导入上限与查看器读取上限，避免 64-512 MiB 合法制品显示可用但无法查看。
+  evidence: 导入器允许 512 MiB Annot，而 document viewer 当前只允许读取 64 MiB。
+- source_spec: `_bmad-output/implementation-artifacts/spec-sync-visual-analysis-to-json.md`
+  summary: 为 Annot 页面预览 LRU 增加按编码数据与解码位图估算的字节预算。
+  evidence: 当前缓存只限制 8 个条目；高熵页面的 PNG、base64 字符串和浏览器解码位图可产生明显内存峰值。
+- source_spec: `_bmad-output/implementation-artifacts/spec-sync-visual-analysis-to-json.md`
+  summary: 让已过期的 Annot 页请求在整文件读取、哈希或 Pdfium 渲染阶段能够取消或让出队列。
+  evidence: 当前只在取得全局渲染锁后检查一次 superseded 状态，随后到来的新页请求仍需等待无用旧页完成昂贵工作。
+- source_spec: `_bmad-output/implementation-artifacts/spec-sync-visual-analysis-to-json.md`
+  summary: 将前端 Annot 热点遍历范围收紧为与后端 ODL `kids` 块身份生成相同的结构边界。
+  evidence: 当前前端递归所有对象属性，metadata 等非块对象若同时含 page number 与 bounding box 会成为无数据库身份的假热点。

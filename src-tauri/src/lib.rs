@@ -17,7 +17,7 @@ use commands::analysis_commands::{
 use commands::api_commands::{get_api_server_status, reset_api_token};
 use commands::diagnostics_commands::record_diagnostic_error;
 use commands::document_viewer_commands::{
-    get_document_viewer_content, get_document_viewer_manifest,
+    get_document_viewer_content, get_document_viewer_manifest, get_document_viewer_page_preview,
 };
 use commands::export_commands::export_media;
 use commands::import_commands::{
@@ -129,6 +129,7 @@ pub fn run() {
             list_pages,
             get_document_viewer_manifest,
             get_document_viewer_content,
+            get_document_viewer_page_preview,
             get_index_status,
             search_pages,
             get_page_image_preview,

@@ -1,5 +1,7 @@
 use serde::Serialize;
 
+use crate::domain::pdf_structure::PdfPageGeometry;
+
 pub const DOCUMENT_VIEWER_FORMATS: [&str; 6] = ["pdf", "annot", "preview", "html", "md", "json"];
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -30,4 +32,13 @@ pub struct DocumentViewerContentDto {
     pub encoding: String,
     pub content: String,
     pub assets: Vec<DocumentViewerAssetDto>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+pub struct DocumentViewerPagePreviewDto {
+    pub format: String,
+    pub page_number: i64,
+    pub mime_type: String,
+    pub data_url: String,
+    pub geometry: PdfPageGeometry,
 }

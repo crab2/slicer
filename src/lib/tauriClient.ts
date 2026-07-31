@@ -18,6 +18,7 @@ import type {
   DocumentViewerContentDto,
   DocumentViewerFormat,
   DocumentViewerManifestDto,
+  DocumentViewerPagePreviewDto,
   ImportResultDto,
   JobDto,
   MediaExportResultDto,
@@ -295,6 +296,17 @@ export const tauriClient = {
     callTauriCommand<DocumentViewerContentDto>("get_document_viewer_content", {
       documentId,
       format,
+    }),
+  getDocumentViewerPagePreview: (
+    documentId: string,
+    pageNumber: number,
+    requestKey: string,
+  ) =>
+    callTauriCommand<DocumentViewerPagePreviewDto>("get_document_viewer_page_preview", {
+      documentId,
+      format: "annot",
+      pageNumber,
+      requestKey,
     }),
   retryImport: (documentId: string) =>
     callTauriCommand<DocumentDto>("retry_import", { documentId }),

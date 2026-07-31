@@ -5,12 +5,19 @@ use pdfium_render::prelude::*;
 use std::fs::File;
 use std::io::{Cursor, Read};
 use std::path::Path;
+use std::sync::Mutex;
 
 pub const MAX_PDF_PAGE_COUNT: usize = 10_000;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct PdfPageMetadata {
     pub page_number: i64,
+    pub geometry: PdfPageGeometry,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenderedPdfPage {
+    pub png_bytes: Vec<u8>,
     pub geometry: PdfPageGeometry,
 }
 
@@ -22,6 +29,7 @@ pub struct PdfiumRenderer;
 
 pub const SEARCH_PREVIEW_WIDTH: i32 = 1_400;
 pub const SEARCH_PREVIEW_MAX_HEIGHT: i32 = 2_000;
+static PDF_PAGE_RENDER_LOCK: Mutex<()> = Mutex::new(());
 
 impl PdfRenderer for PdfiumRenderer {
     fn inspect_pdf(&self, pdf_path: &Path) -> AppResult<Vec<PdfPageMetadata>> {
@@ -104,6 +112,21 @@ impl PdfRenderer for PdfiumRenderer {
 }
 
 pub fn render_pdf_page_to_png(pdf_bytes: &[u8], page_number: i64) -> AppResult<Vec<u8>> {
+    render_pdf_page_to_png_with_geometry(pdf_bytes, page_number).map(|rendered| rendered.png_bytes)
+}
+
+pub fn render_pdf_page_to_png_with_geometry(
+    pdf_bytes: &[u8],
+    page_number: i64,
+) -> AppResult<RenderedPdfPage> {
+    let _render_guard = PDF_PAGE_RENDER_LOCK.lock().map_err(|_| {
+        AppError::new(
+            "pdf_preview_render_lock_failed",
+            "PDF 页面渲染器暂时不可用。",
+            "pdf_preview",
+            true,
+        )
+    })?;
     let pdfium = load_pdfium()?;
     let document = pdfium
         .load_pdf_from_byte_slice(pdf_bytes, None)
@@ -128,6 +151,44 @@ pub fn render_pdf_page_to_png(pdf_bytes: &[u8], page_number: i64) -> AppResult<V
         )
         .with_details(error.to_string())
     })?;
+    let crop = page
+        .boundaries()
+        .crop()
+        .or_else(|_| page.boundaries().media())
+        .map(|boundary| boundary.bounds)
+        .unwrap_or_else(|_| page.page_size());
+    let rotation_degrees = page.rotation().map_err(|error| {
+        AppError::new(
+            "pdf_preview_page_geometry_failed",
+            "无法读取 PDF 预览页面几何信息。",
+            "search",
+            false,
+        )
+        .with_details(error.to_string())
+    })? as i64;
+    let geometry = PdfPageGeometry {
+        width_points: f64::from(page.width().value),
+        height_points: f64::from(page.height().value),
+        crop_left_points: f64::from(crop.left().value),
+        crop_bottom_points: f64::from(crop.bottom().value),
+        crop_right_points: f64::from(crop.right().value),
+        crop_top_points: f64::from(crop.top().value),
+        rotation_degrees: match rotation_degrees {
+            0 => 0,
+            1 => 90,
+            2 => 180,
+            3 => 270,
+            _ => 0,
+        },
+    };
+    if !geometry.is_valid() {
+        return Err(AppError::new(
+            "pdf_preview_page_geometry_invalid",
+            "PDF 预览页面尺寸无效。",
+            "search",
+            false,
+        ));
+    }
     let bitmap = page
         .render_with_config(
             &PdfRenderConfig::new()
@@ -156,7 +217,10 @@ pub fn render_pdf_page_to_png(pdf_bytes: &[u8], page_number: i64) -> AppResult<V
             )
             .with_details(error.to_string())
         })?;
-    Ok(output.into_inner())
+    Ok(RenderedPdfPage {
+        png_bytes: output.into_inner(),
+        geometry,
+    })
 }
 
 fn validate_page_number(page_number: i64, page_count: usize) -> AppResult<PdfPageIndex> {
@@ -268,7 +332,8 @@ mod hex {
 #[cfg(test)]
 mod tests {
     use super::{
-        render_pdf_page_to_png, validate_page_number, validate_pdf_page_count, MAX_PDF_PAGE_COUNT,
+        render_pdf_page_to_png, render_pdf_page_to_png_with_geometry, validate_page_number,
+        validate_pdf_page_count, MAX_PDF_PAGE_COUNT,
     };
 
     #[test]
@@ -303,7 +368,12 @@ mod tests {
     #[test]
     fn renders_only_the_requested_pdf_page_to_memory_png() {
         let pdf = include_bytes!("../../../tmp/pdfs/structured-retrieval-fixture.pdf");
-        let png = render_pdf_page_to_png(pdf, 2).expect("render second page");
+        let rendered = render_pdf_page_to_png_with_geometry(pdf, 2).expect("render second page");
+        assert!(rendered.png_bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
+        assert!(rendered.geometry.is_valid());
+        assert!(rendered.geometry.unrotated_width() > 0.0);
+
+        let png = render_pdf_page_to_png(pdf, 2).expect("legacy PNG-only wrapper");
         assert!(png.starts_with(b"\x89PNG\r\n\x1a\n"));
     }
 }

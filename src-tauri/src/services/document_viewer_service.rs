@@ -1,23 +1,38 @@
 use crate::artifacts::workspace_layout::{is_link_or_reparse_point, WorkspaceLayout};
 use crate::domain::document_viewer::{
     DocumentViewerAssetDto, DocumentViewerContentDto, DocumentViewerFormatAvailabilityDto,
-    DocumentViewerManifestDto, DOCUMENT_VIEWER_FORMATS,
+    DocumentViewerManifestDto, DocumentViewerPagePreviewDto, DOCUMENT_VIEWER_FORMATS,
 };
+use crate::domain::pdf_structure::VisualModuleAnalysisV1;
 use crate::errors::{AppError, AppResult};
+use crate::providers::model::schema_validator::{
+    validate_visual_module_analysis_v1, ExpectedVisualModuleContext,
+};
+use crate::providers::pdf_renderer::render_pdf_page_to_png_with_geometry;
+use crate::providers::pdf_structure::opendataloader_block_id;
 use crate::repositories::document_viewer_repository::{
-    DocumentViewerArtifactRecord, DocumentViewerRepository,
+    DocumentViewerArtifactRecord, DocumentViewerRepository, DocumentViewerVisualEnrichmentRecord,
 };
 use crate::services::workspace_service::WorkspaceService;
 use base64::{engine::general_purpose, Engine as _};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::collections::HashMap;
 use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{LazyLock, Mutex};
 
 const MAX_TEXT_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PDF_ARTIFACT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_PREVIEW_ASSET_BYTES: u64 = 16 * 1024 * 1024;
 const MAX_PREVIEW_ASSETS_TOTAL_BYTES: u64 = 64 * 1024 * 1024;
+const SLICER_VISUAL_ANALYSIS_FIELD: &str = "slicer_visual_analysis";
+static DOCUMENT_VIEWER_RENDER_QUEUE: Mutex<()> = Mutex::new(());
+static DOCUMENT_VIEWER_REQUEST_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+static DOCUMENT_VIEWER_LATEST_REQUESTS: LazyLock<Mutex<HashMap<String, u64>>> =
+    LazyLock::new(|| Mutex::new(HashMap::new()));
 
 pub struct DocumentViewerService;
 
@@ -73,7 +88,7 @@ impl DocumentViewerService {
             MAX_TEXT_ARTIFACT_BYTES
         };
         let (artifact_path, bytes) = read_registered_artifact(&layout, &artifact, max_bytes)?;
-        let (encoding, content) = if matches!(format, "pdf" | "annot") {
+        let (encoding, mut content) = if matches!(format, "pdf" | "annot") {
             ("base64", general_purpose::STANDARD.encode(bytes))
         } else {
             let text = String::from_utf8(bytes).map_err(|err| {
@@ -87,6 +102,14 @@ impl DocumentViewerService {
             })?;
             ("utf8", text)
         };
+        if format == "json" {
+            let enrichments = DocumentViewerRepository::list_visual_enrichments(
+                &mut conn,
+                document_id,
+                &artifact.relative_path,
+            )?;
+            content = project_visual_analysis_json(document_id, &content, &enrichments);
+        }
         let assets = if format == "preview" {
             Self::load_preview_assets(&layout, &mut conn, document_id, &artifact_path)?
         } else {
@@ -100,6 +123,90 @@ impl DocumentViewerService {
             content,
             assets,
         })
+    }
+
+    pub fn get_page_preview(
+        workspace: &WorkspaceService,
+        document_id: &str,
+        format: &str,
+        page_number: i64,
+        request_key: &str,
+    ) -> AppResult<DocumentViewerPagePreviewDto> {
+        if format != "annot" {
+            return Err(AppError::new(
+                "document_viewer_page_preview_format_invalid",
+                "仅 Annot 格式支持交互式按页查看。",
+                "document_viewer",
+                false,
+            )
+            .with_details(format.to_string()));
+        }
+        if page_number < 1 {
+            return Err(page_out_of_range(page_number, None));
+        }
+        let request_key = validate_request_key(request_key)?;
+
+        let layout = workspace.workspace_layout()?;
+        layout.validate_storage_id(document_id, "document")?;
+        let mut conn = workspace.get_db_connection()?;
+        let document = DocumentViewerRepository::find_document(&mut conn, document_id)?
+            .ok_or_else(document_not_found)?;
+        if document
+            .page_count
+            .is_some_and(|page_count| page_number > page_count)
+        {
+            return Err(page_out_of_range(page_number, document.page_count));
+        }
+        let artifact =
+            DocumentViewerRepository::find_artifact(&mut conn, document_id, artifact_kind(format))?
+                .ok_or_else(|| format_unavailable(format))?;
+        drop(conn);
+
+        let request_id = register_latest_page_request(request_key)?;
+        let result = (|| {
+            let _queue_guard = DOCUMENT_VIEWER_RENDER_QUEUE.lock().map_err(|_| {
+                AppError::new(
+                    "document_viewer_page_render_queue_failed",
+                    "Annot 页面渲染队列暂时不可用。",
+                    "document_viewer",
+                    true,
+                )
+            })?;
+            if !page_request_is_latest(request_key, request_id)? {
+                return Err(AppError::new(
+                    "document_viewer_page_request_superseded",
+                    "Annot 页面请求已被更新页码替代。",
+                    "document_viewer",
+                    true,
+                ));
+            }
+
+            let (_, bytes) = read_registered_artifact(&layout, &artifact, MAX_PDF_ARTIFACT_BYTES)?;
+            let rendered =
+                render_pdf_page_to_png_with_geometry(&bytes, page_number).map_err(|error| {
+                    let retryable = error.retryable;
+                    AppError::new(
+                        "document_viewer_page_render_failed",
+                        "Annot 页面渲染失败。",
+                        "document_viewer",
+                        retryable,
+                    )
+                    .with_details(error.to_string())
+                })?;
+
+            Ok(DocumentViewerPagePreviewDto {
+                format: format.to_string(),
+                page_number,
+                mime_type: "image/png".to_string(),
+                data_url: format!(
+                    "data:image/png;base64,{}",
+                    general_purpose::STANDARD.encode(rendered.png_bytes)
+                ),
+                geometry: rendered.geometry,
+            })
+        })();
+        finish_page_request(request_key, request_id);
+        result
     }
 
     fn load_preview_assets(
@@ -163,6 +270,85 @@ impl DocumentViewerService {
         }
         Ok(assets)
     }
+}
+
+fn project_visual_analysis_json(
+    document_id: &str,
+    source: &str,
+    enrichments: &[DocumentViewerVisualEnrichmentRecord],
+) -> String {
+    if enrichments.is_empty() {
+        return source.to_string();
+    }
+    let Ok(mut root) = serde_json::from_str::<Value>(source) else {
+        return source.to_string();
+    };
+    let mut by_block_id = HashMap::new();
+    for record in enrichments {
+        let Ok(untrusted) = serde_json::from_str::<VisualModuleAnalysisV1>(&record.enrichment_json)
+        else {
+            continue;
+        };
+        let expected = ExpectedVisualModuleContext {
+            block_id: record.block_id.clone(),
+            provider: untrusted.model.provider,
+            model_name: untrusted.model.model_name,
+        };
+        let Ok(analysis) = validate_visual_module_analysis_v1(&record.enrichment_json, &expected)
+        else {
+            continue;
+        };
+        let Ok(value) = serde_json::to_value(analysis) else {
+            continue;
+        };
+        by_block_id.insert(record.block_id.clone(), value);
+    }
+    if by_block_id.is_empty() {
+        return source.to_string();
+    }
+
+    let Some(kids) = root.get_mut("kids").and_then(Value::as_array_mut) else {
+        return source.to_string();
+    };
+    let mut projected = false;
+    for (index, kid) in kids.iter_mut().enumerate() {
+        projected |= inject_visual_analysis(document_id, kid, &index.to_string(), &by_block_id);
+    }
+    if !projected {
+        return source.to_string();
+    }
+    let Ok(projected) = serde_json::to_string_pretty(&root) else {
+        return source.to_string();
+    };
+    if projected.len() as u64 > MAX_TEXT_ARTIFACT_BYTES {
+        return source.to_string();
+    }
+    projected
+}
+
+fn inject_visual_analysis(
+    document_id: &str,
+    node: &mut Value,
+    path: &str,
+    by_block_id: &HashMap<String, Value>,
+) -> bool {
+    let block_id = opendataloader_block_id(document_id, node, path);
+    let analysis = by_block_id.get(&block_id).cloned();
+    let Some(object) = node.as_object_mut() else {
+        return false;
+    };
+    let mut projected = false;
+    if let Some(analysis) = analysis {
+        object.insert(SLICER_VISUAL_ANALYSIS_FIELD.to_string(), analysis);
+        projected = true;
+    }
+    if let Some(children) = object.get_mut("kids").and_then(Value::as_array_mut) {
+        for (index, child) in children.iter_mut().enumerate() {
+            projected |=
+                inject_visual_analysis(document_id, child, &format!("{path}.{index}"), by_block_id);
+        }
+    }
+    projected
 }
 
 fn registered_artifact_is_present(
@@ -355,6 +541,59 @@ fn resolve_registered_artifact_path(
     Ok(resolved)
 }
 
+fn validate_request_key(value: &str) -> AppResult<&str> {
+    let value = value.trim();
+    if value.is_empty() || value.len() > 128 {
+        return Err(AppError::new(
+            "document_viewer_request_key_invalid",
+            "Annot 页面请求标识无效。",
+            "document_viewer",
+            false,
+        ));
+    }
+    Ok(value)
+}
+
+fn register_latest_page_request(request_key: &str) -> AppResult<u64> {
+    let request_id = DOCUMENT_VIEWER_REQUEST_SEQUENCE
+        .fetch_add(1, Ordering::Relaxed)
+        .wrapping_add(1);
+    DOCUMENT_VIEWER_LATEST_REQUESTS
+        .lock()
+        .map_err(|_| request_state_error())?
+        .insert(request_key.to_string(), request_id);
+    Ok(request_id)
+}
+
+fn page_request_is_latest(request_key: &str, request_id: u64) -> AppResult<bool> {
+    Ok(DOCUMENT_VIEWER_LATEST_REQUESTS
+        .lock()
+        .map_err(|_| request_state_error())?
+        .get(request_key)
+        .is_some_and(|latest| *latest == request_id))
+}
+
+fn finish_page_request(request_key: &str, request_id: u64) {
+    let Ok(mut requests) = DOCUMENT_VIEWER_LATEST_REQUESTS.lock() else {
+        return;
+    };
+    if requests
+        .get(request_key)
+        .is_some_and(|latest| *latest == request_id)
+    {
+        requests.remove(request_key);
+    }
+}
+
+fn request_state_error() -> AppError {
+    AppError::new(
+        "document_viewer_request_state_failed",
+        "Annot 页面请求状态暂时不可用。",
+        "document_viewer",
+        true,
+    )
+}
+
 fn document_not_found() -> AppError {
     AppError::new(
         "document_viewer_document_not_found",
@@ -372,6 +611,21 @@ fn format_unavailable(format: &str) -> AppError {
         false,
     )
     .with_details(format.to_string())
+}
+
+fn page_out_of_range(page_number: i64, page_count: Option<i64>) -> AppError {
+    AppError::new(
+        "document_viewer_page_out_of_range",
+        "Annot 页码超出文档范围。",
+        "document_viewer",
+        false,
+    )
+    .with_details(format!(
+        "page_number={page_number}; page_count={}",
+        page_count
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    ))
 }
 
 fn artifact_too_large(actual: u64, limit: u64) -> AppError {
@@ -408,8 +662,13 @@ fn hex_digest(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{hex_digest, DocumentViewerService};
+    use super::{
+        finish_page_request, hex_digest, page_request_is_latest, register_latest_page_request,
+        DocumentViewerService,
+    };
     use crate::api::state::ApiAppState;
+    use crate::domain::pdf_structure::VISUAL_MODULE_ANALYSIS_SCHEMA_VERSION;
+    use crate::providers::pdf_structure::opendataloader_block_id;
     use crate::repositories::db::block_on_db;
     use crate::services::api_server_service::ApiServerService;
     use crate::services::workspace_service::WorkspaceService;
@@ -476,6 +735,94 @@ mod tests {
     }
 
     #[test]
+    fn json_content_projects_visual_enrichment_without_mutating_artifact() {
+        let (base, workspace, document_id) = test_workspace();
+        let raw_json = br#"{"number of pages":3,"kids":[{"type":"section","id":"shared","page number":2,"kids":[{"type":"image","id":"shared","page number":2,"source":"images/imageFile3.png","alt_source":"missing","slicer_visual_analysis":{"description":"untrusted source value"}}]},{"type":"image","id":"bad","page number":2,"source":"images/bad.png"},{"type":"image","id":"blob","page number":2,"source":"images/blob.png"}]}"#;
+        let raw_json_path = "structure/document.json";
+        seed_artifact(
+            &workspace,
+            &document_id,
+            "pdf_structure_json",
+            raw_json_path,
+            raw_json,
+        );
+        let source: serde_json::Value =
+            serde_json::from_slice(raw_json).expect("source JSON should parse");
+        let nested_block_id =
+            opendataloader_block_id(&document_id, &source["kids"][0]["kids"][0], "0.0");
+        let bad_block_id = opendataloader_block_id(&document_id, &source["kids"][1], "1");
+        let blob_block_id = opendataloader_block_id(&document_id, &source["kids"][2], "2");
+        let (parse_id, page_id) = seed_structure_run(&workspace, &document_id, raw_json_path);
+        seed_visual_enrichment(
+            &workspace,
+            &document_id,
+            &parse_id,
+            &page_id,
+            &nested_block_id,
+            0,
+            &valid_visual_enrichment(&nested_block_id, "A model-generated description"),
+        );
+        seed_visual_enrichment(
+            &workspace,
+            &document_id,
+            &parse_id,
+            &page_id,
+            &bad_block_id,
+            1,
+            "not-json",
+        );
+        seed_visual_enrichment_blob(
+            &workspace,
+            &document_id,
+            &parse_id,
+            &page_id,
+            &blob_block_id,
+            2,
+        );
+
+        let other_document_id = Uuid::new_v4().to_string();
+        seed_document(&workspace, &other_document_id);
+        let (other_parse_id, other_page_id) =
+            seed_structure_run(&workspace, &other_document_id, raw_json_path);
+        let other_block_id =
+            opendataloader_block_id(&other_document_id, &source["kids"][0]["kids"][0], "0.0");
+        seed_visual_enrichment(
+            &workspace,
+            &other_document_id,
+            &other_parse_id,
+            &other_page_id,
+            &other_block_id,
+            0,
+            &valid_visual_enrichment(&other_block_id, "Other document description"),
+        );
+
+        let artifact_path = workspace
+            .workspace_layout()
+            .expect("layout")
+            .root()
+            .join(raw_json_path);
+        let original_bytes = fs::read(&artifact_path).expect("original artifact");
+        let content = DocumentViewerService::get_content(&workspace, &document_id, "json")
+            .expect("projected JSON content");
+        let projected: serde_json::Value =
+            serde_json::from_str(&content.content).expect("projected JSON should parse");
+        let analysis = &projected["kids"][0]["kids"][0]["slicer_visual_analysis"];
+        assert_eq!(analysis["block_id"], nested_block_id);
+        assert_eq!(analysis["description"], "A model-generated description");
+        assert_eq!(analysis["visible_text"], "Visible model text");
+        assert_eq!(analysis["keywords"], serde_json::json!(["model", "image"]));
+        assert_eq!(analysis["model"]["provider"], "local_mock");
+        assert!(projected["kids"][0].get("slicer_visual_analysis").is_none());
+        assert!(projected["kids"][1].get("slicer_visual_analysis").is_none());
+        assert!(projected["kids"][2].get("slicer_visual_analysis").is_none());
+        assert_eq!(
+            fs::read(&artifact_path).expect("artifact after projection"),
+            original_bytes
+        );
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
     fn preview_only_returns_registered_assets_relative_to_html() {
         let (base, workspace, document_id) = test_workspace();
         seed_artifact(
@@ -500,6 +847,59 @@ mod tests {
         assert!(content.assets[0]
             .data_url
             .starts_with("data:image/png;base64,"));
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn interactive_page_preview_only_accepts_annot_and_valid_page_numbers() {
+        let (base, workspace, document_id) = test_workspace();
+        let invalid_format =
+            DocumentViewerService::get_page_preview(&workspace, &document_id, "pdf", 1, "test")
+                .expect_err("only annot supports interactive page previews");
+        assert_eq!(
+            invalid_format.code,
+            "document_viewer_page_preview_format_invalid"
+        );
+
+        let out_of_range =
+            DocumentViewerService::get_page_preview(&workspace, &document_id, "annot", 4, "test")
+                .expect_err("page count is checked before rendering");
+        assert_eq!(out_of_range.code, "document_viewer_page_out_of_range");
+        let _ = fs::remove_dir_all(base);
+    }
+
+    #[test]
+    fn newer_page_request_supersedes_queued_work_for_the_same_pane() {
+        let request_key = format!("test-pane-{}", Uuid::new_v4());
+        let first = register_latest_page_request(&request_key).expect("first request");
+        let second = register_latest_page_request(&request_key).expect("second request");
+        assert!(!page_request_is_latest(&request_key, first).expect("first status"));
+        assert!(page_request_is_latest(&request_key, second).expect("second status"));
+
+        finish_page_request(&request_key, first);
+        assert!(page_request_is_latest(&request_key, second).expect("second remains latest"));
+        finish_page_request(&request_key, second);
+        assert!(!page_request_is_latest(&request_key, second).expect("request removed"));
+    }
+
+    #[test]
+    fn renders_registered_annot_page_with_geometry() {
+        let (base, workspace, document_id) = test_workspace();
+        seed_artifact(
+            &workspace,
+            &document_id,
+            "pdf_structure_annotated_pdf",
+            "structure/document_annotated.pdf",
+            include_bytes!("../../../tmp/pdfs/structured-retrieval-fixture.pdf"),
+        );
+
+        let preview =
+            DocumentViewerService::get_page_preview(&workspace, &document_id, "annot", 2, "test")
+                .expect("render registered Annot page");
+        assert_eq!(preview.format, "annot");
+        assert_eq!(preview.page_number, 2);
+        assert!(preview.data_url.starts_with("data:image/png;base64,"));
+        assert!(preview.geometry.is_valid());
         let _ = fs::remove_dir_all(base);
     }
 
@@ -580,6 +980,11 @@ mod tests {
         let selected = workspace.select_workspace(root.to_string_lossy().into_owned(), &api);
         assert_eq!(selected.status, "ready");
         let document_id = Uuid::new_v4().to_string();
+        seed_document(&workspace, &document_id);
+        (base, workspace, document_id)
+    }
+
+    fn seed_document(workspace: &WorkspaceService, document_id: &str) {
         let mut conn = workspace.get_db_connection().expect("db");
         block_on_db(async {
             let now = chrono::Utc::now().to_rfc3339();
@@ -598,7 +1003,130 @@ mod tests {
             Ok(())
         })
         .expect("seed document");
-        (base, workspace, document_id)
+    }
+
+    fn seed_structure_run(
+        workspace: &WorkspaceService,
+        document_id: &str,
+        raw_json_path: &str,
+    ) -> (String, String) {
+        let parse_id = Uuid::new_v4().to_string();
+        let page_id = Uuid::new_v4().to_string();
+        let mut conn = workspace.get_db_connection().expect("db");
+        block_on_db(async {
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO page_records
+                 (page_id, document_id, page_number, status, created_at, updated_at)
+                 VALUES (?1, ?2, 2, 'structured', ?3, ?3)",
+            )
+            .bind(&page_id)
+            .bind(document_id)
+            .bind(&now)
+            .execute(&mut conn)
+            .await
+            .expect("page record");
+            sqlx::query(
+                "INSERT INTO pdf_parse_runs
+                 (parse_id, document_id, parser_name, parser_version, schema_version,
+                  parser_options_json, status, raw_json_path, created_at, updated_at)
+                 VALUES (?1, ?2, 'opendataloader-pdf', 'test',
+                         'opendataloader_pdf_json_v2', '{}', 'succeeded', ?3, ?4, ?4)",
+            )
+            .bind(&parse_id)
+            .bind(document_id)
+            .bind(raw_json_path)
+            .bind(now)
+            .execute(&mut conn)
+            .await
+            .expect("parse run");
+            Ok(())
+        })
+        .expect("seed structure run");
+        (parse_id, page_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn seed_visual_enrichment(
+        workspace: &WorkspaceService,
+        document_id: &str,
+        parse_id: &str,
+        page_id: &str,
+        block_id: &str,
+        ordinal: i64,
+        enrichment_json: &str,
+    ) {
+        let mut conn = workspace.get_db_connection().expect("db");
+        block_on_db(async {
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO content_blocks
+                 (block_id, parse_id, document_id, page_id, page_number, ordinal,
+                  block_type, source_text, enrichment_json, raw_json, is_indexable,
+                  is_visual, is_decorative, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 2, ?5, 'image', '', ?6, '{}', 1, 1, 0, ?7, ?7)",
+            )
+            .bind(block_id)
+            .bind(parse_id)
+            .bind(document_id)
+            .bind(page_id)
+            .bind(ordinal)
+            .bind(enrichment_json)
+            .bind(now)
+            .execute(&mut conn)
+            .await
+            .expect("visual block");
+            Ok(())
+        })
+        .expect("seed visual enrichment");
+    }
+
+    fn seed_visual_enrichment_blob(
+        workspace: &WorkspaceService,
+        document_id: &str,
+        parse_id: &str,
+        page_id: &str,
+        block_id: &str,
+        ordinal: i64,
+    ) {
+        let mut conn = workspace.get_db_connection().expect("db");
+        block_on_db(async {
+            let now = chrono::Utc::now().to_rfc3339();
+            sqlx::query(
+                "INSERT INTO content_blocks
+                 (block_id, parse_id, document_id, page_id, page_number, ordinal,
+                  block_type, source_text, enrichment_json, raw_json, is_indexable,
+                  is_visual, is_decorative, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, 2, ?5, 'image', '', ?6, '{}', 1, 1, 0, ?7, ?7)",
+            )
+            .bind(block_id)
+            .bind(parse_id)
+            .bind(document_id)
+            .bind(page_id)
+            .bind(ordinal)
+            .bind(vec![0xff_u8, 0xfe_u8])
+            .bind(now)
+            .execute(&mut conn)
+            .await
+            .expect("visual block with blob enrichment");
+            Ok(())
+        })
+        .expect("seed blob visual enrichment");
+    }
+
+    fn valid_visual_enrichment(block_id: &str, description: &str) -> String {
+        serde_json::json!({
+            "schema_version": VISUAL_MODULE_ANALYSIS_SCHEMA_VERSION,
+            "block_id": block_id,
+            "description": description,
+            "visible_text": "Visible model text",
+            "keywords": ["model", "image"],
+            "model": {
+                "provider": "local_mock",
+                "model_name": "mock-model"
+            }
+        })
+        .to_string()
     }
 
     fn seed_artifact(
